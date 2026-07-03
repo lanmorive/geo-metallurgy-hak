@@ -152,3 +152,50 @@ def read_extraction_jsonl(path: Path) -> list[ExtractionResult]:
             data: dict[str, Any] = json.loads(line)
             results.append(ExtractionResult.model_validate(data))
     return results
+
+
+def sync_extracted_from_s3(local_dir: Path) -> int:
+    """Скачать extracted/ из S3 в локальную директорию."""
+    from app.storage import get_storage
+
+    storage = get_storage()
+    if not storage.available:
+        return 0
+    return storage.sync_prefix_down("extracted/", local_dir)
+
+
+def _default_extracted_dir() -> Path:
+    repo_root = Path(__file__).resolve().parents[3]
+    return repo_root / "data" / "extracted"
+
+
+def main() -> int:
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Sync extracted data from S3")
+    parser.add_argument(
+        "--from-s3",
+        action="store_true",
+        help="Download extracted/ prefix from S3 to local directory",
+    )
+    parser.add_argument(
+        "--dir",
+        type=Path,
+        default=None,
+        help="Local extracted directory (default: repo data/extracted)",
+    )
+    args = parser.parse_args()
+
+    if not args.from_s3:
+        parser.error("--from-s3 is required")
+
+    local_dir = args.dir or _default_extracted_dir()
+    count = sync_extracted_from_s3(local_dir)
+    logger.info("Synced %d files to %s", count, local_dir)
+    return 0
+
+
+if __name__ == "__main__":
+    import sys
+
+    sys.exit(main())
