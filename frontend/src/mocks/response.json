@@ -1,0 +1,84 @@
+{
+  "answer_markdown": "## Методы обессоливания при сульфатах 200–300 мг/л\n\n### Консенсус\nПри содержании сульфатов **200–300 мг/л** и сухом остатке **≤ 1000 мг/дм³** в корпусе\nпреобладают два подхода:\n\n1. **Обратный осмос** — пилотные испытания при 250 мг/л SO₄²⁻ показали стабильное\n   снижение минерализации [pub-001] (confidence: 0.92).\n2. **Ионный обмен** — лабораторные эксперименты при 280 мг/л [pub-002] (confidence: 0.88).\n\n### Условия экспериментов\n| Метод | Сульфаты | Сухой остаток | Масштаб |\n|-------|----------|---------------|---------|\n| Обратный осмос | ≤ 300 мг/л | ≤ 1000 мг/дм³ | pilot |\n| Ионный обмен | 280 мг/л | — | lab |\n\n### Выводы\nДля промышленного внедрения при заданных диапазонах рекомендуется приоритизировать\nмембранные схемы с пилотной валидацией на площадке ЗФ [pub-001].\n",
+  "citations": [
+    {
+      "doc_id": "pub-001",
+      "title": "Обессоливание шахтных вод на Заполярном филиале",
+      "snippet": "Обратный осмос при 250 мг/л сульфатов обеспечил снижение TDS до 450 мг/дм³.",
+      "confidence": 0.92,
+      "year": 2019,
+      "geography": "RU"
+    },
+    {
+      "doc_id": "pub-002",
+      "title": "Comparative study of desalination methods for mine water",
+      "snippet": "Ion exchange effective at sulfate concentrations up to 300 mg/L in bench-scale tests.",
+      "confidence": 0.88,
+      "year": 2020,
+      "geography": "WORLD"
+    }
+  ],
+  "graph_subset": {
+    "nodes": [
+      {"id": "proc-ro", "label": "Process", "type": "Process", "name": "обратный осмос", "properties": {"category": "мембранный метод"}},
+      {"id": "proc-ie", "label": "Process", "type": "Process", "name": "ионный обмен", "properties": {"category": "реагентный метод"}},
+      {"id": "mat-water", "label": "Material", "type": "Material", "name": "техническая вода", "properties": {}},
+      {"id": "prop-sulfate", "label": "Property", "type": "Property", "name": "сульфаты", "properties": {"unit": "мг/л"}},
+      {"id": "prop-tds", "label": "Property", "type": "Property", "name": "сухой остаток", "properties": {"unit": "мг/дм³"}},
+      {"id": "exp-001", "label": "Experiment", "type": "Experiment", "name": "Пилот обратного осмоса при 250 мг/л SO4", "properties": {"scale": "pilot", "year": 2019}},
+      {"id": "exp-002", "label": "Experiment", "type": "Experiment", "name": "Ионообменная колонна, сульфаты 280 мг/л", "properties": {"scale": "lab", "year": 2021}},
+      {"id": "pub-001", "label": "Publication", "type": "Publication", "name": "Обессоливание шахтных вод на Заполярном филиале", "properties": {"year": 2019, "geography": "RU"}},
+      {"id": "pub-002", "label": "Publication", "type": "Publication", "name": "Comparative study of desalination methods for mine water", "properties": {"year": 2020, "geography": "WORLD"}},
+      {"id": "expert-ivanov", "label": "Expert", "type": "Expert", "name": "Иванов А.С.", "properties": {"affiliation": "НИЦ водоподготовки"}},
+      {"id": "fac-pilot", "label": "Facility", "type": "Facility", "name": "Пилотная установка ЗФ", "properties": {"location": "RU"}}
+    ],
+    "edges": [
+      {"id": "e1", "source": "exp-001", "target": "proc-ro", "type": "validated_by", "properties": {"confidence": 0.92}},
+      {"id": "e2", "source": "exp-001", "target": "prop-sulfate", "type": "operates_at_condition", "properties": {"parameter": "сульфаты", "operator": "<=", "value": 300, "unit": "мг/л"}},
+      {"id": "e3", "source": "exp-001", "target": "prop-tds", "type": "operates_at_condition", "properties": {"parameter": "сухой остаток", "operator": "<=", "value": 1000, "unit": "мг/дм³"}},
+      {"id": "e4", "source": "exp-001", "target": "pub-001", "type": "described_in", "properties": {}},
+      {"id": "e5", "source": "exp-002", "target": "proc-ie", "type": "validated_by", "properties": {"confidence": 0.88}},
+      {"id": "e6", "source": "pub-001", "target": "pub-002", "type": "contradicts", "properties": {"description": "Разные рекомендуемые пределы сульфатов"}},
+      {"id": "e7", "source": "pub-001", "target": "expert-ivanov", "type": "authored_by", "properties": {}},
+      {"id": "e8", "source": "exp-001", "target": "fac-pilot", "type": "conducted_at", "properties": {}},
+      {"id": "e9", "source": "exp-001", "target": "mat-water", "type": "uses_material", "properties": {}}
+    ]
+  },
+  "contradictions": [
+    {
+      "claim_a": "Обратный осмос эффективен при сульфатах до 300 мг/л [pub-001]",
+      "claim_b": "Ионный обмен предпочтительнее при сульфатах > 200 мг/л [pub-002]",
+      "source_a": "pub-001",
+      "source_b": "pub-002",
+      "description": "Источники расходятся в рекомендуемом методе при перекрывающихся диапазонах сульфатов."
+    }
+  ],
+  "knowledge_gaps": [
+    {
+      "entities": ["обратный осмос", "сульфаты 200-300 мг/л", "промышленный масштаб"],
+      "missing_link": "Experiment",
+      "description": "Нет промышленных экспериментов (industrial scale) при сульфатах 200–300 мг/л и TDS ≤ 1000 мг/дм³."
+    },
+    {
+      "entities": ["ионный обмен", "сухой остаток ≤ 1000 мг/дм³"],
+      "missing_link": "Experiment",
+      "description": "Отсутствуют эксперименты ионного обмена с одновременным контролем сухого остатка."
+    }
+  ],
+  "recommended_experts": [
+    {
+      "name": "Иванов А.С.",
+      "affiliation": "НИЦ водоподготовки",
+      "publication_count": 3,
+      "top_publications": ["pub-001"]
+    },
+    {
+      "name": "Smith J.",
+      "affiliation": "Mining Water Research Group",
+      "publication_count": 2,
+      "top_publications": ["pub-002"]
+    }
+  ],
+  "mock": true,
+  "warning": "Ответ на мок-данных. Pipeline retrieval/synthesis ещё не подключён."
+}
