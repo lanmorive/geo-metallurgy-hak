@@ -115,6 +115,11 @@ export interface SubgraphResponse {
   mock: boolean
 }
 
+export interface GraphStatsResponse {
+  entity_count: number
+  mock: boolean
+}
+
 export interface HealthResponse {
   status: string
   neo4j: string
@@ -131,8 +136,12 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>
 }
 
-export async function postQuery(request: QueryRequest): Promise<QueryResponse> {
+export async function postQuery(
+  request: QueryRequest,
+  signal?: AbortSignal,
+): Promise<QueryResponse> {
   if (USE_MOCKS) {
+    await new Promise((resolve) => setTimeout(resolve, 600))
     const mock = await import('../mocks/response.json')
     return mock.default as QueryResponse
   }
@@ -140,26 +149,49 @@ export async function postQuery(request: QueryRequest): Promise<QueryResponse> {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(request),
+    signal,
   })
 }
 
-export async function getSubgraph(nodeIds?: string[]): Promise<SubgraphResponse> {
+export async function getSubgraph(
+  options?: { nodeIds?: string[]; limit?: number },
+): Promise<SubgraphResponse> {
   if (USE_MOCKS) {
-    const mock = await import('../mocks/response.json')
-    const data = mock.default as QueryResponse
-    if (!nodeIds?.length) {
-      return { nodes: data.graph_subset.nodes, edges: data.graph_subset.edges, mock: true }
+    const mock = await import('../mocks/graph.json')
+    const data = mock.default as SubgraphResponse & { entity_count?: number }
+    const { nodeIds, limit = 150 } = options ?? {}
+
+    let nodes = data.nodes
+    let edges = data.edges
+
+    if (nodeIds?.length) {
+      const idSet = new Set(nodeIds)
+      nodes = nodes.filter((n) => idSet.has(n.id))
+      const nodeIdSet = new Set(nodes.map((n) => n.id))
+      edges = edges.filter((e) => nodeIdSet.has(e.source) && nodeIdSet.has(e.target))
+    } else if (limit > 0 && nodes.length > limit) {
+      nodes = nodes.slice(0, limit)
+      const nodeIdSet = new Set(nodes.map((n) => n.id))
+      edges = edges.filter((e) => nodeIdSet.has(e.source) && nodeIdSet.has(e.target))
     }
-    const idSet = new Set(nodeIds)
-    const nodes = data.graph_subset.nodes.filter((n) => idSet.has(n.id))
-    const nodeIdSet = new Set(nodes.map((n) => n.id))
-    const edges = data.graph_subset.edges.filter(
-      (e) => nodeIdSet.has(e.source) && nodeIdSet.has(e.target),
-    )
+
     return { nodes, edges, mock: true }
   }
-  const params = nodeIds?.length ? `?${nodeIds.map((id) => `node_ids=${encodeURIComponent(id)}`).join('&')}` : ''
-  return fetchJson<SubgraphResponse>(`${API_URL}/api/graph/subgraph${params}`)
+
+  const params = new URLSearchParams()
+  if (options?.limit) params.set('limit', String(options.limit))
+  options?.nodeIds?.forEach((id) => params.append('node_ids', id))
+  const qs = params.toString() ? `?${params.toString()}` : ''
+  return fetchJson<SubgraphResponse>(`${API_URL}/api/graph/subgraph${qs}`)
+}
+
+export async function getGraphStats(): Promise<GraphStatsResponse> {
+  if (USE_MOCKS) {
+    const mock = await import('../mocks/graph.json')
+    const data = mock.default as { entity_count: number }
+    return { entity_count: data.entity_count, mock: true }
+  }
+  return fetchJson<GraphStatsResponse>(`${API_URL}/api/graph/stats`)
 }
 
 export async function checkHealth(): Promise<HealthResponse> {
