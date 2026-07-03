@@ -3,5 +3,10 @@
 @tailwind utilities;
 
 body {
-  @apply bg-slate-950 text-slate-100 min-h-screen;
+  @apply bg-surface-app text-neutral-900 min-h-screen antialiased;
+}
+
+.font-mono,
+.font-mono * {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
 }
