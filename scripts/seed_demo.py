@@ -24,8 +24,10 @@ def build_demo_extraction() -> dict:
         EntityType,
         ExtractionResult,
         ExperimentScale,
+        Lang,
         NumericConstraint,
         NumericOperator,
+        OrgType,
         Relation,
         RelationType,
         VerificationMeta,
@@ -37,7 +39,7 @@ def build_demo_extraction() -> dict:
     ids = {k: str(uuid.uuid4()) for k in [
         "ro", "ie", "water", "sulfate", "tds",
         "exp1", "exp2", "exp3", "pub1", "pub2", "pub3",
-        "expert1", "expert2", "fac1", "equip1",
+        "expert1", "expert2", "fac1", "equip1", "org1",
         "prop_temp", "prop_pressure",
     ]}
 
@@ -61,24 +63,31 @@ def build_demo_extraction() -> dict:
         Entity(type=EntityType.EXPERIMENT, name="RO bench 220 мг/л", name_norm="ro bench 220",
                scale=ExperimentScale.LAB, verification=vm("pub-003", 0.86, "WORLD", 2020)),
         Entity(type=EntityType.PUBLICATION, name="Обессоливание шахтных вод ЗФ", name_norm="обессоливание зф",
-               year=2019, doc_type=DocType.REPORT, verification=vm("pub-001", 0.95)),
+               year=2019, lang=Lang.RU, doc_type=DocType.REPORT,
+               venue="Отчёт НИЦ водоподготовки", source_path="data/corpus/pub-001.pdf",
+               verification=vm("pub-001", 0.95)),
         Entity(type=EntityType.PUBLICATION, name="Mine water desalination review", name_norm="desalination review",
-               year=2020, lang="en", doc_type=DocType.ARTICLE, verification=vm("pub-002", 0.9, "WORLD")),
+               year=2020, lang=Lang.EN, doc_type=DocType.ARTICLE,
+               venue="Mine Water and the Environment", source_path="data/corpus/pub-002.pdf",
+               verification=vm("pub-002", 0.9, "WORLD")),
         Entity(type=EntityType.PUBLICATION, name="Membrane limits for sulfate removal", name_norm="membrane sulfate",
-               year=2018, lang="en", doc_type=DocType.ARTICLE, verification=vm("pub-003", 0.87, "WORLD")),
+               year=2018, lang=Lang.EN, doc_type=DocType.ARTICLE,
+               source_path="data/corpus/pub-003.pdf",
+               verification=vm("pub-003", 0.87, "WORLD")),
         Entity(type=EntityType.EXPERT, name="Иванов А.С.", name_norm="иванов а.с.",
                affiliation="НИЦ водоподготовки", verification=vm("pub-001", 0.9)),
         Entity(type=EntityType.EXPERT, name="Smith J.", name_norm="smith j.",
                affiliation="Mining Water Research", verification=vm("pub-002", 0.85, "WORLD")),
+        Entity(type=EntityType.ORGANIZATION, name="ЗФ Норникель", name_norm="зф норникель",
+               org_type=OrgType.COMPANY, country="RU", verification=vm("pub-001", 0.9)),
         Entity(type=EntityType.FACILITY, name="Пилотная установка ЗФ", name_norm="пилот зф",
                location="RU", verification=vm("pub-001", 0.9)),
         Entity(type=EntityType.EQUIPMENT, name="Мембранный модуль RO-400", name_norm="ro-400",
                model="RO-400", verification=vm("pub-001", 0.88)),
     ]
 
-    # Assign predefined ids for reproducibility in demo
     key_map = ["ro", "ie", "water", "sulfate", "tds", "prop_temp", "exp1", "exp2", "exp3",
-               "pub1", "pub2", "pub3", "expert1", "expert2", "fac1", "equip1"]
+               "pub1", "pub2", "pub3", "expert1", "expert2", "org1", "fac1", "equip1"]
     for entity, key in zip(entities, key_map):
         entity.id = ids[key]
 
@@ -106,6 +115,12 @@ def build_demo_extraction() -> dict:
                  verification=vm("pub-001", 0.9)),
         Relation(type=RelationType.AUTHORED_BY, source_id=ids["pub1"], target_id=ids["expert1"],
                  verification=vm("pub-001", 0.95)),
+        Relation(type=RelationType.AFFILIATED_WITH, source_id=ids["expert1"], target_id=ids["org1"],
+                 verification=vm("pub-001", 0.9)),
+        Relation(type=RelationType.OWNS, source_id=ids["org1"], target_id=ids["fac1"],
+                 date_from="2015", verification=vm("pub-001", 0.88)),
+        Relation(type=RelationType.OPERATES, source_id=ids["org1"], target_id=ids["fac1"],
+                 date_from="2016", verification=vm("pub-001", 0.88)),
         Relation(type=RelationType.VALIDATED_BY, source_id=ids["exp2"], target_id=ids["ie"],
                  verification=vm("pub-002", 0.88)),
         Relation(type=RelationType.DESCRIBED_IN, source_id=ids["exp2"], target_id=ids["pub2"],

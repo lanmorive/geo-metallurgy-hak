@@ -23,24 +23,20 @@ FOR (n:Publication) REQUIRE (n.name_norm) IS UNIQUE;
 CREATE CONSTRAINT expert_name IF NOT EXISTS
 FOR (n:Expert) REQUIRE (n.name_norm) IS UNIQUE;
 
+CREATE CONSTRAINT organization_name IF NOT EXISTS
+FOR (n:Organization) REQUIRE (n.name_norm) IS UNIQUE;
+
 CREATE CONSTRAINT facility_name IF NOT EXISTS
 FOR (n:Facility) REQUIRE (n.name_norm) IS UNIQUE;
 
 // --- Fulltext index ---
 CREATE FULLTEXT INDEX entity_fulltext IF NOT EXISTS
-FOR (n:Material|Process|Equipment|Property|Experiment|Publication|Expert|Facility)
+FOR (n:Material|Process|Equipment|Property|Experiment|Publication|Expert|Organization|Facility)
 ON EACH [n.name, n.name_norm, n.aliases];
 
-// --- Vector indexes (bge-m3, 1024 dimensions) ---
-CREATE VECTOR INDEX publication_embedding IF NOT EXISTS
-FOR (n:Publication) ON (n.embedding)
-OPTIONS {indexConfig: {
-  `vector.dimensions`: 1024,
-  `vector.similarity_function`: 'cosine'
-}};
-
-CREATE VECTOR INDEX experiment_embedding IF NOT EXISTS
-FOR (n:Experiment) ON (n.embedding)
+// --- Vector index (bge-m3, 1024 dimensions) ---
+CREATE VECTOR INDEX chunk_embedding IF NOT EXISTS
+FOR (n:Chunk) ON (n.embedding)
 OPTIONS {indexConfig: {
   `vector.dimensions`: 1024,
   `vector.similarity_function`: 'cosine'

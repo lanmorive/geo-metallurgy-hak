@@ -14,7 +14,8 @@ class NumericFilter(BaseModel):
 
     parameter: str
     operator: NumericOperator
-    value: float
+    value: float | None = None
+    value_min: float | None = None
     value_max: float | None = None
     unit: str | None = None
 

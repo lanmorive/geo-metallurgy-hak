@@ -66,14 +66,28 @@ MOCK_GRAPH_NODES: list[GraphNode] = [
         label="Publication",
         type=EntityType.PUBLICATION,
         name="Обессоливание шахтных вод на Заполярном филиале",
-        properties={"year": 2019, "geography": "RU"},
+        properties={
+            "year": 2019,
+            "lang": "ru",
+            "doc_type": "report",
+            "venue": "Отчёт НИЦ водоподготовки",
+            "source_path": "data/corpus/pub-001.pdf",
+            "geography": "RU",
+        },
     ),
     GraphNode(
         id="pub-002",
         label="Publication",
         type=EntityType.PUBLICATION,
         name="Comparative study of desalination methods for mine water",
-        properties={"year": 2020, "geography": "WORLD"},
+        properties={
+            "year": 2020,
+            "lang": "en",
+            "doc_type": "article",
+            "venue": "Mine Water and the Environment",
+            "source_path": "data/corpus/pub-002.pdf",
+            "geography": "WORLD",
+        },
     ),
     GraphNode(
         id="expert-ivanov",
@@ -81,6 +95,13 @@ MOCK_GRAPH_NODES: list[GraphNode] = [
         type=EntityType.EXPERT,
         name="Иванов А.С.",
         properties={"affiliation": "НИЦ водоподготовки"},
+    ),
+    GraphNode(
+        id="org-zf",
+        label="Organization",
+        type=EntityType.ORGANIZATION,
+        name="ЗФ Норникель",
+        properties={"org_type": "company", "country": "RU"},
     ),
     GraphNode(
         id="fac-pilot",
@@ -154,6 +175,27 @@ MOCK_GRAPH_EDGES: list[GraphEdge] = [
         target="mat-water",
         type=RelationType.USES_MATERIAL,
         properties={},
+    ),
+    GraphEdge(
+        id="e10",
+        source="expert-ivanov",
+        target="org-zf",
+        type=RelationType.AFFILIATED_WITH,
+        properties={},
+    ),
+    GraphEdge(
+        id="e11",
+        source="org-zf",
+        target="fac-pilot",
+        type=RelationType.OWNS,
+        properties={"date_from": "2015"},
+    ),
+    GraphEdge(
+        id="e12",
+        source="org-zf",
+        target="fac-pilot",
+        type=RelationType.OPERATES,
+        properties={"date_from": "2016"},
     ),
 ]
 

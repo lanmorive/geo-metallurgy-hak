@@ -9,11 +9,58 @@ from typing import Any
 
 from neo4j import Driver
 
-from app.schemas.ontology import Entity, ExtractionResult, Relation
+from app.schemas.ontology import Entity, EntityType, ExtractionResult, Relation
 
 logger = logging.getLogger(__name__)
 
 BATCH_SIZE = 500
+
+_MERGE_BY_NAME_NORM = """
+UNWIND $rows AS row
+CALL apoc.merge.node([row.type], {name_norm: row.name_norm}, row, row) YIELD node
+RETURN count(node) AS cnt
+"""
+
+_MERGE_CHUNK_BY_ID = """
+UNWIND $rows AS row
+CALL apoc.merge.node(['Chunk'], {id: row.id}, row, row) YIELD node
+RETURN count(node) AS cnt
+"""
+
+_MERGE_RELATION = """
+UNWIND $rows AS row
+MATCH (src {id: row.source_id})
+MATCH (dst {id: row.target_id})
+CALL apoc.merge.relationship(
+  src,
+  row.type,
+  {id: row.id},
+  row,
+  dst
+) YIELD rel
+RETURN count(rel) AS cnt
+"""
+
+
+def _entity_row(entity: Entity) -> dict[str, Any]:
+    """Сериализовать Entity для Neo4j UNWIND."""
+    row = entity.model_dump(mode="json")
+    row["type"] = entity.type.value
+    return row
+
+
+def _relation_row(relation: Relation) -> dict[str, Any]:
+    """Сериализовать Relation для Neo4j UNWIND."""
+    row = relation.model_dump(mode="json")
+    row["type"] = relation.type.value
+    verification = row.pop("verification", {})
+    for key, val in verification.items():
+        row[f"verification_{key}"] = val
+    row["source_doc"] = verification.get("source_doc")
+    row["confidence"] = verification.get("confidence")
+    row["geography"] = verification.get("geography")
+    row["year"] = verification.get("year")
+    return row
 
 
 def load_jsonl(path: Path, driver: Driver) -> tuple[int, int]:
@@ -43,6 +90,8 @@ def batch_upsert_entities(driver: Driver, entities: list[Entity]) -> int:
     """
     Батч-вставка/обновление сущностей через UNWIND.
 
+    Chunk мержится по id (нет uniqueness на name_norm); остальные — по name_norm.
+
     Args:
         driver: Neo4j driver.
         entities: Список сущностей (до BATCH_SIZE).
@@ -52,21 +101,29 @@ def batch_upsert_entities(driver: Driver, entities: list[Entity]) -> int:
     """
     if not entities:
         return 0
-    rows = [e.model_dump(mode="json") for e in entities]
-    query = """
-    UNWIND $rows AS row
-    CALL apoc.merge.node([row.type], {name_norm: row.name_norm}, row, row) YIELD node
-    RETURN count(node) AS cnt
-    """
+
+    chunks = [_entity_row(e) for e in entities if e.type == EntityType.CHUNK]
+    others = [_entity_row(e) for e in entities if e.type != EntityType.CHUNK]
+    total = 0
+
     with driver.session() as session:
-        result = session.run(query, rows=rows)
-        record = result.single()
-        return record["cnt"] if record else 0
+        if others:
+            result = session.run(_MERGE_BY_NAME_NORM, rows=others)
+            record = result.single()
+            total += record["cnt"] if record else 0
+        if chunks:
+            result = session.run(_MERGE_CHUNK_BY_ID, rows=chunks)
+            record = result.single()
+            total += record["cnt"] if record else 0
+
+    return total
 
 
 def batch_upsert_relations(driver: Driver, relations: list[Relation]) -> int:
     """
     Батч-вставка связей через UNWIND.
+
+    Пишет verification, numeric_constraints, date_from/date_to/amount (owns/operates).
 
     Args:
         driver: Neo4j driver.

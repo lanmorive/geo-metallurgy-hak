@@ -28,6 +28,3 @@ neo4j_data/
 .vscode/
 *.swp
 .DS_Store
-
-# Cursor
-cursor-docs/

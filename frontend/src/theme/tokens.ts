@@ -25,6 +25,7 @@ export const colors = {
     Equipment: '#D4537E',
     Property: '#EF9F27',
     Facility: '#5F5E5A',
+    Organization: '#B45309',
   },
   graph: {
     edge: '#B4B2A9',

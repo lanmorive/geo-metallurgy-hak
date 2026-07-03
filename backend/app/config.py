@@ -13,12 +13,21 @@ class Settings(BaseSettings):
     embedding_model: str = "BAAI/bge-m3"
     backend_cors_origins: str = "http://localhost:5173"
     data_dir: str = "/data"
+    s3_endpoint_url: str = ""
+    s3_region: str = "ru-central1"
+    s3_bucket: str = ""
+    s3_access_key_id: str = ""
+    s3_secret_access_key: str = ""
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     @property
     def cors_origins(self) -> list[str]:
         return [o.strip() for o in self.backend_cors_origins.split(",") if o.strip()]
+
+    @property
+    def s3_configured(self) -> bool:
+        return bool(self.s3_bucket and self.s3_access_key_id and self.s3_secret_access_key)
 
 
 settings = Settings()

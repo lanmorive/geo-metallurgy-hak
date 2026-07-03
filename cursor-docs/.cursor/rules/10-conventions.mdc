@@ -1,0 +1,57 @@
+---
+description: Конвенции кода — Python backend и React frontend
+alwaysApply: true
+---
+
+# Конвенции разработки
+
+## Python (backend)
+- Python 3.11, type hints везде, Pydantic v2 (`model_validate`, `model_dump`)
+- Именование: snake_case функции/переменные, PascalCase модели
+- Один модуль = одна ответственность; кросс-модульные импорты только
+  через `app/schemas/*` — модули НЕ импортируют друг друга напрямую
+  (ingest не знает про graph, graph не знает про retrieval и т.д.)
+- Конфиги только через `app/config.py` (pydantic-settings), никаких
+  `os.environ` в бизнес-коде, никаких хардкод-ключей
+- Логирование: стандартный `logging`, logger = logging.getLogger(__name__);
+  логировать входы/выходы LLM-вызовов (усечённо) и все ошибки парсинга
+- Ошибки: не глотать исключения молча; на уровне API — HTTPException
+  с человекочитаемым detail
+- Данные между этапами pipeline: JSONL-файлы в `data/parsed/` и
+  `data/extracted/`, одна запись = один валидный JSON Pydantic-модели
+- Neo4j: только параметризованные запросы, батч-загрузка через UNWIND
+  (батчи по 500), никакой конкатенации строк в Cypher
+- Тесты: только e2e-смоук в `tests/test_e2e.py` на 4 эталонных запроса —
+  юнит-тесты на хакатоне не пишем, если явно не попросили
+
+## LLM-вызовы
+- Все промпты — в `extraction/prompts.py` и `synthesis/`, не инлайнить
+  в бизнес-логику; промпты на русском, few-shot примеры из глоссария ТЗ
+- Всегда: response_format=json, temperature=0 для extraction,
+  0.2 для synthesis
+- Валидация ответа Pydantic-моделью; при ошибке — retry с текстом ошибки
+  валидации в промпте (max 3 попытки), затем запись в лог и skip записи
+- Confidence извлечённого факта проставляет LLM (0–1) + понижаем на 0.2,
+  если факт прошёл retry
+
+## TypeScript (frontend)
+- Строгий TS (`strict: true`), без `any`
+- Типы API — только из `src/api/client.ts`, зеркалят Pydantic-схемы;
+  при изменении схем бэка обновить типы в том же PR
+- Компоненты функциональные, состояние — useState/useReducer,
+  без Redux и прочих стейт-менеджеров
+- Tailwind для стилей, без CSS-файлов; shadcn/ui можно
+- Фронт обязан работать на `src/mocks/response.json` при недоступном бэке
+  (переключатель через env VITE_USE_MOCKS)
+
+## Git
+- Ветки: `feat/<модуль>-<кратко>` от main, владелец модуля мержит сам
+- Коммиты: `<модуль>: что сделано` (пример: `extraction: retry на невалидный JSON`)
+- В main всегда рабочий docker-compose up; сломал — чинишь немедленно
+- НЕ трогать чужой модуль без пинга владельца (см. docs/TEAM.md)
+- `data/raw/` в .gitignore; секреты только в `.env` (не коммитится)
+
+## Definition of Done для любой фичи
+1. Запускается через docker-compose / Makefile
+2. Контракты schemas не сломаны (мок-ответ /api/query валиден)
+3. Прогнан хотя бы 1 эталонный запрос из docs/DEMO.md
