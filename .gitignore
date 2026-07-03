@@ -1,0 +1,33 @@
+# Environment
+.env
+.venv/
+venv/
+
+# Data corpus (not committed)
+data/raw/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+dist/
+build/
+
+# Node
+node_modules/
+frontend/dist/
+frontend/tsconfig.tsbuildinfo
+
+# Neo4j
+neo4j_data/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Cursor
+cursor-docs/
