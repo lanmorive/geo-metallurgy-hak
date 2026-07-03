@@ -1,85 +1,112 @@
-import { useState, useCallback } from 'react'
-import ChatPanel, { type ChatMessage } from './components/ChatPanel'
+import { useEffect, useState } from 'react'
+import { FileDown, Network } from 'lucide-react'
 import Filters from './components/Filters'
-import AnswerCard from './components/AnswerCard'
+import ChatPanel from './components/ChatPanel'
 import GraphView from './components/GraphView'
-import {
-  postQuery,
-  type QueryFilters,
-  type QueryRequest,
-  type QueryResponse,
-} from './api/client'
+import { getSubgraph, type GraphEdge, type GraphNode } from './api/client'
+import { useQuerySystem } from './hooks/useQuerySystem'
 
-const defaultFilters: QueryFilters = {
-  geo: null,
-  year_range: [2010, 2025],
-  min_confidence: 0,
-  numeric_filters: [],
+function formatEntityCount(count: number | null): string {
+  if (count == null) return '—'
+  return count.toLocaleString('ru-RU')
+}
+
+function exportMarkdown(markdown: string) {
+  const blob = new Blob([markdown], { type: 'text/markdown;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = 'nauchny-klubok-answer.md'
+  a.click()
+  URL.revokeObjectURL(url)
 }
 
 export default function App() {
-  const [filters, setFilters] = useState<QueryFilters>(defaultFilters)
-  const [messages, setMessages] = useState<ChatMessage[]>([])
-  const [response, setResponse] = useState<QueryResponse | null>(null)
-  const [loading, setLoading] = useState(false)
+  const {
+    filters,
+    setFilters,
+    conversation,
+    loading,
+    entityCount,
+    currentResponse,
+    highlightedNodeId,
+    flashNodeId,
+    highlightNode,
+    sendQuery,
+    retryLast,
+  } = useQuerySystem()
 
-  const citedNodeIds = response?.citations.map((c) => c.doc_id) ?? []
+  const [previewNodes, setPreviewNodes] = useState<GraphNode[]>([])
+  const [previewEdges, setPreviewEdges] = useState<GraphEdge[]>([])
 
-  const handleSubmit = useCallback(async (request: QueryRequest) => {
-    setMessages((prev) => [...prev, { role: 'user', content: request.query }])
-    setLoading(true)
-    try {
-      const result = await postQuery(request)
-      setResponse(result)
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: 'assistant',
-          content: result.answer_markdown.slice(0, 300) + (result.answer_markdown.length > 300 ? '…' : ''),
-        },
-      ])
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Ошибка запроса'
-      setMessages((prev) => [...prev, { role: 'assistant', content: `Ошибка: ${msg}` }])
-    } finally {
-      setLoading(false)
-    }
+  useEffect(() => {
+    getSubgraph({ limit: 150 })
+      .then((data) => {
+        setPreviewNodes(data.nodes)
+        setPreviewEdges(data.edges)
+      })
+      .catch(() => {
+        setPreviewNodes([])
+        setPreviewEdges([])
+      })
   }, [])
 
+  const graphNodes = currentResponse?.graph_subset.nodes ?? previewNodes
+  const graphEdges = currentResponse?.graph_subset.edges ?? previewEdges
+  const citedNodeIds =
+    currentResponse?.graph_subset.nodes.map((n) => n.id) ?? []
+
   return (
-    <div className="min-h-screen flex flex-col">
-      <header className="border-b border-slate-800 px-6 py-4">
-        <h1 className="text-xl font-bold text-cyan-300">Научный клубок</h1>
-        <p className="text-sm text-slate-400">
-          Поисково-аналитическая система на графе знаний R&D документов
-        </p>
+    <div className="h-screen flex flex-col overflow-hidden">
+      <header className="h-14 shrink-0 border-b border-surface-border bg-surface-card flex items-center justify-between px-4">
+        <div className="flex items-center gap-3 min-w-0">
+          <Network className="w-5 h-5 text-brand-primary shrink-0" />
+          <h1 className="text-sm font-medium text-neutral-900 shrink-0">Научный клубок</h1>
+          <span className="text-xs px-2.5 py-1 rounded-pill border border-surface-border bg-neutral-50 text-neutral-600 font-mono shrink-0">
+            граф: {formatEntityCount(entityCount)} сущностей
+          </span>
+        </div>
+        <button
+          type="button"
+          onClick={() => {
+            if (currentResponse?.answer_markdown) {
+              exportMarkdown(currentResponse.answer_markdown)
+            }
+          }}
+          disabled={!currentResponse?.answer_markdown}
+          className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-control border border-surface-border text-neutral-700 hover:bg-neutral-50 disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          <FileDown size={14} />
+          Экспорт MD
+        </button>
       </header>
 
-      <main className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-4 p-4 min-h-0">
-        <aside className="lg:col-span-2 bg-slate-900/50 rounded-lg border border-slate-800 p-4">
+      <div className="flex-1 grid grid-cols-[240px_minmax(0,1fr)_360px] min-h-0">
+        <aside className="border-r border-surface-border overflow-hidden min-h-0">
           <Filters filters={filters} onChange={setFilters} />
         </aside>
 
-        <section className="lg:col-span-5 flex flex-col gap-4 min-h-[60vh]">
-          <div className="bg-slate-900/50 rounded-lg border border-slate-800 p-4 flex-1 min-h-[200px]">
-            <ChatPanel
-              onSubmit={handleSubmit}
-              loading={loading}
-              messages={messages}
-              filters={filters}
-            />
-          </div>
-          <AnswerCard response={response} loading={loading} />
-        </section>
-
-        <section className="lg:col-span-5 min-h-[60vh] bg-slate-900/50 rounded-lg border border-slate-800 p-4">
-          <GraphView
-            nodes={response?.graph_subset.nodes ?? []}
-            edges={response?.graph_subset.edges ?? []}
-            highlightedNodeIds={citedNodeIds}
+        <main className="min-h-0 overflow-hidden">
+          <ChatPanel
+            conversation={conversation}
+            loading={loading}
+            onSubmit={sendQuery}
+            onRetry={retryLast}
+            onCitationClick={highlightNode}
           />
-        </section>
-      </main>
+        </main>
+
+        <aside className="border-l border-surface-border min-h-0 overflow-hidden">
+          <GraphView
+            nodes={graphNodes}
+            edges={graphEdges}
+            citedNodeIds={citedNodeIds}
+            highlightedNodeId={highlightedNodeId}
+            flashNodeId={flashNodeId}
+            onSendQuery={sendQuery}
+          />
+        </aside>
+      </div>
     </div>
   )
 }
