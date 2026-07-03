@@ -10,9 +10,9 @@ from __future__ import annotations
 
 import uuid
 from enum import StrEnum
-from typing import Any
+from typing import Any, Self
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class EntityType(StrEnum):
@@ -22,7 +22,9 @@ class EntityType(StrEnum):
     PROPERTY = "Property"
     EXPERIMENT = "Experiment"
     PUBLICATION = "Publication"
+    CHUNK = "Chunk"
     EXPERT = "Expert"
+    ORGANIZATION = "Organization"
     FACILITY = "Facility"
 
 
@@ -34,8 +36,12 @@ class RelationType(StrEnum):
     VALIDATED_BY = "validated_by"
     CONTRADICTS = "contradicts"
     AUTHORED_BY = "authored_by"
+    AFFILIATED_WITH = "affiliated_with"
+    OWNS = "owns"
+    OPERATES = "operates"
     CONDUCTED_AT = "conducted_at"
     USES_EQUIPMENT = "uses_equipment"
+    PART_OF = "part_of"
     RELATES_TO = "relates_to"
 
 
@@ -59,11 +65,21 @@ class ExperimentScale(StrEnum):
 
 
 class DocType(StrEnum):
-    ARTICLE = "article"
     REPORT = "report"
-    PATENT = "patent"
-    CATALOG = "catalog"
-    OTHER = "other"
+    ARTICLE = "article"
+    PRESENTATION = "presentation"
+    REFERENCE = "reference"
+
+
+class Lang(StrEnum):
+    RU = "ru"
+    EN = "en"
+
+
+class OrgType(StrEnum):
+    COMPANY = "company"
+    INSTITUTE = "institute"
+    JV = "JV"
 
 
 class VerificationMeta(BaseModel):
@@ -83,11 +99,23 @@ class NumericConstraint(BaseModel):
 
     parameter: str = Field(..., description='Параметр, напр. "сульфаты", "температура"')
     operator: NumericOperator = Field(..., description="<=, >=, =, range")
-    value: float = Field(..., description="Числовое значение (value_min для range)")
-    value_max: float | None = Field(
-        default=None, description="Верхняя граница для operator=range"
-    )
+    value: float | None = Field(default=None, description="Числовое значение для <=, >=, =")
+    value_min: float | None = Field(default=None, description="Нижняя граница для operator=range")
+    value_max: float | None = Field(default=None, description="Верхняя граница для operator=range")
     unit: str = Field(..., description='Единица как в источнике, напр. "мг/л"')
+
+    @model_validator(mode="after")
+    def validate_numeric_values(self) -> Self:
+        if self.operator == NumericOperator.RANGE:
+            vmin = self.value_min
+            if vmin is None and self.value is not None:
+                vmin = self.value
+            if vmin is None or self.value_max is None:
+                raise ValueError("operator=range requires value_min and value_max")
+            return self.model_copy(update={"value_min": vmin, "value": None})
+        if self.value is None:
+            raise ValueError(f"operator={self.operator} requires value")
+        return self
 
 
 class Entity(BaseModel):
@@ -110,9 +138,14 @@ class Entity(BaseModel):
     date: str | None = None
     scale: ExperimentScale | None = None
     year: int | None = None
-    lang: str | None = None
+    lang: Lang | None = None
     doc_type: DocType | None = None
+    venue: str | None = None
     source_path: str | None = None
+    org_type: OrgType | None = None
+    country: str | None = None
+    text: str | None = None
+    chunk_index: int | None = None
     affiliation: str | None = None
     location: str | None = None
 
@@ -120,6 +153,12 @@ class Entity(BaseModel):
     embedding: list[float] | None = None
 
     model_config = {"populate_by_name": True}
+
+    @model_validator(mode="after")
+    def validate_publication_fields(self) -> Self:
+        if self.type == EntityType.PUBLICATION and not self.source_path:
+            raise ValueError("Publication requires source_path")
+        return self
 
 
 class Relation(BaseModel):
@@ -130,6 +169,9 @@ class Relation(BaseModel):
     source_id: str
     target_id: str
     numeric_constraints: list[NumericConstraint] = Field(default_factory=list)
+    date_from: str | None = None
+    date_to: str | None = None
+    amount: str | None = None
     verification: VerificationMeta
 
 
@@ -139,7 +181,8 @@ class ChunkMetadata(BaseModel):
     title: str | None = None
     year: int | None = None
     geography: str = "UNKNOWN"
-    doc_type: DocType = DocType.OTHER
+    doc_type: DocType = DocType.REPORT
+    lang: Lang = Lang.RU
 
 
 class ParsedChunk(BaseModel):
@@ -150,7 +193,7 @@ class ParsedChunk(BaseModel):
     source_path: str
     text: str
     page: int | None = None
-    lang: str = "ru"
+    lang: Lang = Lang.RU
     metadata: ChunkMetadata = Field(default_factory=ChunkMetadata)
 
 
