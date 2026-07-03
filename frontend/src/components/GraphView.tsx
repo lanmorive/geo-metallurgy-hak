@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import ForceGraph2D, { type ForceGraphMethods } from 'react-force-graph-2d'
 import type { EntityType, GraphEdge, GraphNode } from '../api/client'
+import { GRAPH_HIDDEN_ENTITY_TYPES } from '../api/client'
 import { colors } from '../theme/tokens'
 
 interface GraphViewProps {
@@ -35,6 +36,7 @@ const ENTITY_TYPES: EntityType[] = [
   'Publication',
   'Experiment',
   'Expert',
+  'Organization',
   'Equipment',
   'Property',
   'Facility',
@@ -46,9 +48,11 @@ const ENTITY_LABELS: Record<EntityType, string> = {
   Publication: 'Публикация',
   Experiment: 'Эксперимент',
   Expert: 'Эксперт',
+  Organization: 'Организация',
   Equipment: 'Оборудование',
   Property: 'Свойство',
   Facility: 'Объект',
+  Chunk: 'Фрагмент',
 }
 
 const ENTITY_BG_CLASS: Record<EntityType, string> = {
@@ -57,9 +61,11 @@ const ENTITY_BG_CLASS: Record<EntityType, string> = {
   Publication: 'bg-entity-Publication',
   Experiment: 'bg-entity-Experiment',
   Expert: 'bg-entity-Expert',
+  Organization: 'bg-entity-Organization',
   Equipment: 'bg-entity-Equipment',
   Property: 'bg-entity-Property',
   Facility: 'bg-entity-Facility',
+  Chunk: 'bg-neutral-300',
 }
 
 function truncateLabel(label: string, max = 14): string {
@@ -68,7 +74,8 @@ function truncateLabel(label: string, max = 14): string {
 }
 
 function getNodeColor(type: EntityType): string {
-  return colors.entity[type]
+  const palette = colors.entity as Record<string, string>
+  return palette[type] ?? colors.graph.edge
 }
 
 export default function GraphView({
@@ -87,16 +94,23 @@ export default function GraphView({
   const [popoverPos, setPopoverPos] = useState({ x: 0, y: 0 })
 
   const citedSet = useMemo(() => new Set(citedNodeIds), [citedNodeIds])
-  const nodeMap = useMemo(() => new Map(nodes.map((n) => [n.id, n])), [nodes])
+  const hiddenTypes = useMemo(() => new Set(GRAPH_HIDDEN_ENTITY_TYPES), [])
+  const visibleNodes = useMemo(
+    () => nodes.filter((n) => !hiddenTypes.has(n.type)),
+    [nodes, hiddenTypes],
+  )
+  const nodeMap = useMemo(() => new Map(visibleNodes.map((n) => [n.id, n])), [visibleNodes])
 
   const graphData = useMemo(() => {
+    const visibleIds = new Set(visibleNodes.map((n) => n.id))
     const degreeMap = new Map<string, number>()
     edges.forEach((e) => {
+      if (!visibleIds.has(e.source) || !visibleIds.has(e.target)) return
       degreeMap.set(e.source, (degreeMap.get(e.source) ?? 0) + 1)
       degreeMap.set(e.target, (degreeMap.get(e.target) ?? 0) + 1)
     })
 
-    const forceNodes: ForceNode[] = nodes.map((n) => ({
+    const forceNodes: ForceNode[] = visibleNodes.map((n) => ({
       id: n.id,
       label: n.label || n.name,
       name: n.name,
@@ -105,14 +119,16 @@ export default function GraphView({
       degree: degreeMap.get(n.id) ?? 0,
     }))
 
-    const forceLinks: ForceLink[] = edges.map((e) => ({
+    const forceLinks: ForceLink[] = edges
+      .filter((e) => visibleIds.has(e.source) && visibleIds.has(e.target))
+      .map((e) => ({
       source: e.source,
       target: e.target,
       type: e.type,
     }))
 
     return { nodes: forceNodes, links: forceLinks }
-  }, [nodes, edges])
+  }, [visibleNodes, edges])
 
   useEffect(() => {
     const el = containerRef.current
@@ -245,7 +261,7 @@ export default function GraphView({
       </p>
 
       <div ref={containerRef} className="flex-1 relative min-h-0 mx-2 mb-2 rounded-control border border-surface-border bg-surface-card overflow-hidden">
-        {nodes.length === 0 ? (
+        {visibleNodes.length === 0 ? (
           <div className="absolute inset-0 flex items-center justify-center text-xs text-neutral-400">
             Загрузка графа…
           </div>

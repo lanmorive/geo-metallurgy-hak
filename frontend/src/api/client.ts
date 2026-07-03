@@ -10,7 +10,9 @@ export type EntityType =
   | 'Property'
   | 'Experiment'
   | 'Publication'
+  | 'Chunk'
   | 'Expert'
+  | 'Organization'
   | 'Facility'
 
 export type RelationType =
@@ -21,16 +23,24 @@ export type RelationType =
   | 'validated_by'
   | 'contradicts'
   | 'authored_by'
+  | 'affiliated_with'
+  | 'owns'
+  | 'operates'
   | 'conducted_at'
   | 'uses_equipment'
+  | 'part_of'
   | 'relates_to'
+
+/** Типы узлов, не отображаемые в графе визуализации */
+export const GRAPH_HIDDEN_ENTITY_TYPES: EntityType[] = ['Chunk']
 
 export type NumericOperator = '<=' | '>=' | '=' | 'range'
 
 export interface NumericFilter {
   parameter: string
   operator: NumericOperator
-  value: number
+  value?: number | null
+  value_min?: number | null
   value_max?: number | null
   unit?: string | null
 }
