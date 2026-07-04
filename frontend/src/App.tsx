@@ -25,6 +25,7 @@ export default function App() {
   const {
     filters,
     setFilters,
+    resetFilters,
     conversation,
     loading,
     entityCount,
@@ -89,7 +90,7 @@ export default function App() {
 
       <div className="flex-1 grid grid-cols-[240px_minmax(0,1fr)_360px] min-h-0">
         <aside className="border-r border-surface-border overflow-hidden min-h-0">
-          <Filters filters={filters} onChange={setFilters} />
+          <Filters filters={filters} onChange={setFilters} onReset={resetFilters} />
         </aside>
 
         <main className="min-h-0 overflow-hidden">

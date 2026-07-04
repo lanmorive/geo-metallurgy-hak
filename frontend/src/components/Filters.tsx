@@ -1,10 +1,12 @@
 import { useState } from 'react'
 import { Plus, X } from 'lucide-react'
 import type { NumericFilter, NumericOperator, QueryFilters } from '../api/client'
+import { defaultFilters, filtersEqual } from '../constants/defaultFilters'
 
 interface FiltersProps {
   filters: QueryFilters
   onChange: (filters: QueryFilters) => void
+  onReset: () => void
 }
 
 type GeoOption = 'RU' | 'WORLD' | 'ALL'
@@ -22,6 +24,10 @@ const OPERATORS: { value: NumericOperator; label: string }[] = [
   { value: 'range', label: 'диапазон' },
 ]
 
+const INVALID_NUMERIC_CLASS = 'border-red-500 focus:border-red-500'
+const VALID_INPUT_CLASS =
+  'border-surface-border focus:outline-none focus:border-brand-primary'
+
 function formatNumericFilter(f: NumericFilter): string {
   const unit = f.unit ? ` ${f.unit}` : ''
   if (f.operator === 'range' && f.value_max != null) {
@@ -37,11 +43,16 @@ function geoToOption(geo: string | null | undefined): GeoOption {
   return 'ALL'
 }
 
-export default function Filters({ filters, onChange }: FiltersProps) {
+function isInvalidNumberInput(value: string): boolean {
+  return value !== '' && !Number.isFinite(Number(value))
+}
+
+export default function Filters({ filters, onChange, onReset }: FiltersProps) {
   const yearFrom = filters.year_range?.[0] ?? 2010
   const yearTo = filters.year_range?.[1] ?? 2026
   const minConfidence = filters.min_confidence ?? 0
   const numericFilters = filters.numeric_filters ?? []
+  const isDirty = !filtersEqual(filters, defaultFilters)
 
   const [showAddForm, setShowAddForm] = useState(false)
   const [newParam, setNewParam] = useState('')
@@ -51,6 +62,17 @@ export default function Filters({ filters, onChange }: FiltersProps) {
   const [newUnit, setNewUnit] = useState('')
 
   const geoOption = geoToOption(filters.geo)
+
+  const yearFromInvalid = !Number.isFinite(yearFrom)
+  const yearToInvalid = !Number.isFinite(yearTo)
+  const newValueInvalid = isInvalidNumberInput(newValue)
+  const newValueMaxInvalid = newOperator === 'range' && isInvalidNumberInput(newValueMax)
+
+  const canAddNumeric =
+    newParam.trim() !== '' &&
+    newValue !== '' &&
+    !newValueInvalid &&
+    (newOperator !== 'range' || (newValueMax !== '' && !newValueMaxInvalid))
 
   const handleGeoChange = (option: GeoOption) => {
     onChange({
@@ -67,9 +89,9 @@ export default function Filters({ filters, onChange }: FiltersProps) {
   }
 
   const addNumericFilter = () => {
-    const value = Number(newValue)
-    if (!newParam.trim() || Number.isNaN(value)) return
+    if (!canAddNumeric) return
 
+    const value = Number(newValue)
     const filter: NumericFilter = {
       parameter: newParam.trim(),
       operator: newOperator,
@@ -77,9 +99,7 @@ export default function Filters({ filters, onChange }: FiltersProps) {
       unit: newUnit.trim() || null,
     }
     if (newOperator === 'range') {
-      const valueMax = Number(newValueMax)
-      if (Number.isNaN(valueMax)) return
-      filter.value_max = valueMax
+      filter.value_max = Number(newValueMax)
     }
 
     onChange({
@@ -121,26 +141,32 @@ export default function Filters({ filters, onChange }: FiltersProps) {
         <div className="flex items-center gap-2">
           <input
             type="number"
-            value={yearFrom}
+            value={yearFromInvalid ? '' : yearFrom}
             onChange={(e) =>
               onChange({
                 ...filters,
                 year_range: [Number(e.target.value), yearTo],
               })
             }
-            className="w-full font-mono text-sm rounded-control border border-surface-border bg-surface-card px-2 py-1.5 focus:outline-none focus:border-brand-primary"
+            title={yearFromInvalid ? 'Введите число' : undefined}
+            className={`w-full font-mono text-sm rounded-control border bg-surface-card px-2 py-1.5 ${
+              yearFromInvalid ? INVALID_NUMERIC_CLASS : VALID_INPUT_CLASS
+            }`}
           />
           <span className="text-neutral-400 text-sm">–</span>
           <input
             type="number"
-            value={yearTo}
+            value={yearToInvalid ? '' : yearTo}
             onChange={(e) =>
               onChange({
                 ...filters,
                 year_range: [yearFrom, Number(e.target.value)],
               })
             }
-            className="w-full font-mono text-sm rounded-control border border-surface-border bg-surface-card px-2 py-1.5 focus:outline-none focus:border-brand-primary"
+            title={yearToInvalid ? 'Введите число' : undefined}
+            className={`w-full font-mono text-sm rounded-control border bg-surface-card px-2 py-1.5 ${
+              yearToInvalid ? INVALID_NUMERIC_CLASS : VALID_INPUT_CLASS
+            }`}
           />
         </div>
       </section>
@@ -164,7 +190,10 @@ export default function Filters({ filters, onChange }: FiltersProps) {
       </section>
 
       <section>
-        <h3 className="text-xs text-neutral-500 mb-2">Параметры</h3>
+        <h3 className="text-xs text-neutral-500 mb-1">Параметры</h3>
+        <p className="text-[11px] text-neutral-400 mb-2">
+          Необязательно: условия можно писать прямо в вопросе — система поймёт числа и диапазоны
+        </p>
         <div className="space-y-2">
           {numericFilters.map((f, i) => (
             <div
@@ -195,12 +224,12 @@ export default function Filters({ filters, onChange }: FiltersProps) {
                 placeholder="Параметр"
                 value={newParam}
                 onChange={(e) => setNewParam(e.target.value)}
-                className="w-full text-sm rounded-control border border-surface-border px-2 py-1.5 focus:outline-none focus:border-brand-primary"
+                className={`w-full text-sm rounded-control border px-2 py-1.5 ${VALID_INPUT_CLASS}`}
               />
               <select
                 value={newOperator}
                 onChange={(e) => setNewOperator(e.target.value as NumericOperator)}
-                className="w-full text-sm rounded-control border border-surface-border px-2 py-1.5 focus:outline-none focus:border-brand-primary"
+                className={`w-full text-sm rounded-control border px-2 py-1.5 ${VALID_INPUT_CLASS}`}
               >
                 {OPERATORS.map((op) => (
                   <option key={op.value} value={op.value}>
@@ -214,7 +243,10 @@ export default function Filters({ filters, onChange }: FiltersProps) {
                   placeholder="Значение"
                   value={newValue}
                   onChange={(e) => setNewValue(e.target.value)}
-                  className="flex-1 font-mono text-sm rounded-control border border-surface-border px-2 py-1.5 focus:outline-none focus:border-brand-primary"
+                  title={newValueInvalid ? 'Введите число' : undefined}
+                  className={`flex-1 font-mono text-sm rounded-control border px-2 py-1.5 ${
+                    newValueInvalid ? INVALID_NUMERIC_CLASS : VALID_INPUT_CLASS
+                  }`}
                 />
                 {newOperator === 'range' && (
                   <input
@@ -222,7 +254,10 @@ export default function Filters({ filters, onChange }: FiltersProps) {
                     placeholder="До"
                     value={newValueMax}
                     onChange={(e) => setNewValueMax(e.target.value)}
-                    className="flex-1 font-mono text-sm rounded-control border border-surface-border px-2 py-1.5 focus:outline-none focus:border-brand-primary"
+                    title={newValueMaxInvalid ? 'Введите число' : undefined}
+                    className={`flex-1 font-mono text-sm rounded-control border px-2 py-1.5 ${
+                      newValueMaxInvalid ? INVALID_NUMERIC_CLASS : VALID_INPUT_CLASS
+                    }`}
                   />
                 )}
               </div>
@@ -231,13 +266,14 @@ export default function Filters({ filters, onChange }: FiltersProps) {
                 placeholder="Единица"
                 value={newUnit}
                 onChange={(e) => setNewUnit(e.target.value)}
-                className="w-full font-mono text-sm rounded-control border border-surface-border px-2 py-1.5 focus:outline-none focus:border-brand-primary"
+                className={`w-full font-mono text-sm rounded-control border px-2 py-1.5 ${VALID_INPUT_CLASS}`}
               />
               <div className="flex gap-2">
                 <button
                   type="button"
                   onClick={addNumericFilter}
-                  className="flex-1 text-xs py-1.5 rounded-control bg-brand-primary text-white hover:opacity-90"
+                  disabled={!canAddNumeric}
+                  className="flex-1 text-xs py-1.5 rounded-control bg-brand-primary text-white hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
                 >
                   Добавить
                 </button>
@@ -262,6 +298,16 @@ export default function Filters({ filters, onChange }: FiltersProps) {
           )}
         </div>
       </section>
+
+      {isDirty && (
+        <button
+          type="button"
+          onClick={onReset}
+          className="text-xs py-2 rounded-control border border-surface-border text-neutral-600 hover:bg-neutral-50"
+        >
+          Сбросить фильтры
+        </button>
+      )}
     </div>
   )
 }

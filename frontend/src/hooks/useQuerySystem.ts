@@ -2,9 +2,10 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   getGraphStats,
   postQuery,
-  type QueryFilters,
   type QueryResponse,
 } from '../api/client'
+import { defaultFilters } from '../constants/defaultFilters'
+import { sanitizeFilters } from '../utils/sanitizeFilters'
 
 export interface ConversationItem {
   id: string
@@ -14,16 +15,6 @@ export interface ConversationItem {
   error?: string
 }
 
-const defaultFilters: QueryFilters = {
-  geo: 'RU',
-  year_range: [2010, 2026],
-  min_confidence: 0.6,
-  numeric_filters: [
-    { parameter: 'сульфаты', operator: 'range', value: 200, value_max: 300, unit: 'мг/л' },
-    { parameter: 'сухой остаток', operator: '<=', value: 1000, unit: 'мг/дм³' },
-  ],
-}
-
 let nextId = 0
 function genId(): string {
   nextId += 1
@@ -31,7 +22,7 @@ function genId(): string {
 }
 
 export function useQuerySystem() {
-  const [filters, setFilters] = useState<QueryFilters>(defaultFilters)
+  const [filters, setFilters] = useState(defaultFilters)
   const [conversation, setConversation] = useState<ConversationItem[]>([])
   const [loading, setLoading] = useState(false)
   const [entityCount, setEntityCount] = useState<number | null>(null)
@@ -81,7 +72,7 @@ export function useQuerySystem() {
       setHighlightedNodeId(null)
 
       try {
-        const result = await postQuery({ query, filters }, controller.signal)
+        const result = await postQuery({ query, filters: sanitizeFilters(filters) }, controller.signal)
         if (controller.signal.aborted) return
         setConversation((prev) =>
           prev.map((item) =>
@@ -136,7 +127,10 @@ export function useQuerySystem() {
     setHighlightedNodeId(null)
 
     try {
-      const result = await postQuery({ query: lastUser.query, filters }, controller.signal)
+      const result = await postQuery(
+        { query: lastUser.query, filters: sanitizeFilters(filters) },
+        controller.signal,
+      )
       if (controller.signal.aborted) return
       setConversation((prev) =>
         prev.map((item) =>
@@ -164,9 +158,14 @@ export function useQuerySystem() {
     }
   }, [])
 
+  const resetFilters = useCallback(() => {
+    setFilters(defaultFilters)
+  }, [])
+
   return {
     filters,
     setFilters,
+    resetFilters,
     conversation,
     loading,
     entityCount,
