@@ -1,4 +1,4 @@
-.PHONY: up down ingest extract load-graph test seed-demo s3-push s3-pull llm-up llm-smoke
+.PHONY: up down ingest extract extract-core extract-sample load-graph test seed-demo s3-push s3-pull llm-up llm-smoke
 
 up:
 	docker compose up -d --build
@@ -16,7 +16,13 @@ ingest:
 	PYTHONPATH=backend backend/.venv/bin/python -m app.ingest.run $(if $(FORCE),--force,)
 
 extract:
-	PYTHONPATH=backend backend/.venv/bin/python scripts/run_pipeline.py --step extract
+	PYTHONPATH=backend backend/.venv/bin/python -m app.extraction.run_extraction $(if $(FORCE),--force,)
+
+extract-core:
+	PYTHONPATH=backend backend/.venv/bin/python -m app.extraction.run_extraction --core-only $(if $(FORCE),--force,)
+
+extract-sample:
+	PYTHONPATH=backend backend/.venv/bin/python -m app.extraction.run_extraction --sample
 
 load-graph:
 	PYTHONPATH=backend backend/.venv/bin/python scripts/run_pipeline.py --step load

@@ -28,46 +28,9 @@ def step_ingest() -> int:
 
 def step_extract() -> int:
     """Извлечение сущностей из data/parsed/."""
-    from openai import OpenAI
+    from app.extraction.run_extraction import main
 
-    from app.config import settings
-    from app.extraction.extractor import extract_from_chunk
-    from app.extraction.normalizer import normalize_entity
-    from app.schemas.ontology import ExtractionResult, ParsedChunk
-    from app.storage import get_storage
-
-    storage = get_storage()
-    parsed_files = list(DATA_PARSED.glob("*.jsonl"))
-    if not parsed_files:
-        logger.warning("No parsed JSONL in %s", DATA_PARSED)
-        return 0
-
-    client = OpenAI(api_key=settings.llm_api_key, base_url=settings.llm_base_url)
-
-    for path in parsed_files:
-        logger.info("Extracting from %s", path.name)
-        results: list[ExtractionResult] = []
-        with path.open(encoding="utf-8") as f:
-            for line in f:
-                chunk = ParsedChunk.model_validate_json(line.strip())
-                try:
-                    result = extract_from_chunk(chunk, client, settings.llm_model)
-                    result.entities = [
-                        normalize_entity(e) for e in result.entities
-                    ]
-                    results.append(result)
-                except NotImplementedError as exc:
-                    logger.warning("Extract not implemented: %s", exc)
-                    return 0
-
-        out_path = DATA_EXTRACTED / path.name
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        with out_path.open("w", encoding="utf-8") as out:
-            for result in results:
-                out.write(result.model_dump_json() + "\n")
-        if storage.available:
-            storage.upload_jsonl(results, f"extracted/{path.name}")
-    return 0
+    return main()
 
 
 def step_load(from_s3: bool = False) -> int:
