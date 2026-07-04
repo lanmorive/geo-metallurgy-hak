@@ -23,6 +23,14 @@ DATA_PREFIXES = ("raw/", "parsed/", "extracted/", "artifacts/")
 DATA_SUBDIRS = ("raw", "parsed", "extracted", "artifacts")
 
 
+class S3ObjectInfo(BaseModel):
+    """Метаданные объекта S3 из list_objects_v2."""
+
+    key: str
+    etag: str
+    size: int
+
+
 def _warn_once(message: str, *args: object) -> None:
     global _s3_warned
     if not _s3_warned:
@@ -120,17 +128,27 @@ class S3Storage:
             if line:
                 yield model.model_validate_json(line)
 
-    def list_keys(self, prefix: str) -> list[str]:
+    def list_objects(self, prefix: str) -> list[S3ObjectInfo]:
         if not self._available or self._client is None:
             return []
-        keys: list[str] = []
+        objects: list[S3ObjectInfo] = []
         paginator = self._client.get_paginator("list_objects_v2")
         for page in paginator.paginate(Bucket=self.bucket, Prefix=prefix):
             for obj in page.get("Contents", []):
                 key = obj["Key"]
-                if not key.endswith("/"):
-                    keys.append(key)
-        return keys
+                if key.endswith("/"):
+                    continue
+                objects.append(
+                    S3ObjectInfo(
+                        key=key,
+                        etag=str(obj.get("ETag", "")).strip('"'),
+                        size=int(obj.get("Size", 0)),
+                    )
+                )
+        return objects
+
+    def list_keys(self, prefix: str) -> list[str]:
+        return [obj.key for obj in self.list_objects(prefix)]
 
     def exists(self, key: str) -> bool:
         if not self._available or self._client is None:
