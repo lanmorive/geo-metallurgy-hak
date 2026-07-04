@@ -213,6 +213,7 @@ class ParsedDocumentMeta(BaseModel):
     source_key: str
     file_hash: str
     file_metadata_author: str | None = None
+    file_metadata_title: str | None = None
     author_hint: str | None = None
     created: str | None = None
     pages: int | None = None
@@ -221,6 +222,7 @@ class ParsedDocumentMeta(BaseModel):
     ocr_pages: int
     ocr_skipped_pages: int = 0
     ocr_low_yield_pages: int = 0
+    image_only_slides: int = 0
     noise_blocks_dropped: int
     text_chars: int = 0
     text_chars_per_page: float | None = None
