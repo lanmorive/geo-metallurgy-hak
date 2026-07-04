@@ -5,31 +5,18 @@ from typing import Any
 
 from fastapi import APIRouter, Query
 
+from app.graph.convert import (
+    ALL_NODE_LABELS,
+    ENTITY_LABELS,
+    records_to_subset,
+)
 from app.graph.driver import get_driver
 from app.schemas.api import GraphStatsResponse, GraphSubset, SubgraphResponse
-from app.schemas.ontology import EntityType, GraphEdge, GraphNode, RelationType
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-ENTITY_LABELS = [
-    "Material",
-    "Process",
-    "Equipment",
-    "Property",
-    "Experiment",
-    "Expert",
-    "Organization",
-    "Facility",
-]
-
-ALL_NODE_LABELS = [*ENTITY_LABELS, "Publication", "Chunk"]
 SKIP_EXPANSION_REL_TYPES = {"part_of", "described_in"}
-
-_NODE_ID_KEYS = {
-    "Publication": "doc_id",
-    "Chunk": "chunk_id",
-}
 
 _STATS_CYPHER = """
 MATCH (n)
@@ -89,139 +76,13 @@ RETURN nodes, rels
 """
 
 
-def _first_known_label(labels: list[str]) -> str:
-    for label in labels:
-        if label in ALL_NODE_LABELS:
-            return label
-    return labels[0] if labels else "Property"
-
-
-def _node_id(label: str, props: dict[str, Any], element_id: str | None = None) -> str:
-    key = _NODE_ID_KEYS.get(label)
-    if key and props.get(key):
-        return str(props[key])
-    if props.get("id"):
-        return str(props["id"])
-    if props.get("name_norm"):
-        return str(props["name_norm"])
-    if props.get("name"):
-        return str(props["name"])
-    return f"{label}:{element_id or 'unknown'}"
-
-
-def _node_name(label: str, props: dict[str, Any], node_id: str) -> str:
-    if label == "Publication":
-        return str(props.get("title") or props.get("name") or node_id)
-    if label == "Chunk":
-        text = str(props.get("text") or node_id)
-        return text[:80]
-    return str(props.get("name") or props.get("title") or node_id)
-
-
-def _to_graph_node(node: Any) -> GraphNode:
-    labels = list(node.labels)
-    label = _first_known_label(labels)
-    props = dict(node)
-    node_id = _node_id(label, props, str(node.element_id))
-    try:
-        entity_type = EntityType(label)
-    except ValueError:
-        entity_type = EntityType.PROPERTY
-    return GraphNode(
-        id=node_id,
-        label=label,
-        type=entity_type,
-        name=_node_name(label, props, node_id),
-        properties={k: v for k, v in props.items() if k != "embedding"},
-    )
-
-
-def _to_graph_edge(rel: Any) -> GraphEdge | None:
-    source = _to_graph_node(rel.start_node).id
-    target = _to_graph_node(rel.end_node).id
-    rel_type = rel.type
-    try:
-        typed_rel = RelationType(rel_type)
-    except ValueError:
-        logger.debug("Skipping unsupported relation type %s", rel_type)
-        return None
-    return GraphEdge(
-        id=str(rel.element_id),
-        source=source,
-        target=target,
-        type=typed_rel,
-        properties=dict(rel),
-    )
-
-
-def _records_to_subset(nodes: list[Any], rels: list[Any]) -> GraphSubset:
-    graph_nodes: dict[str, GraphNode] = {}
-    for node in nodes:
-        if node is None:
-            continue
-        graph_node = _to_graph_node(node)
-        graph_nodes[graph_node.id] = graph_node
-
-    graph_edges: dict[str, GraphEdge] = {}
-    for rel in rels:
-        if rel is None:
-            continue
-        edge = _to_graph_edge(rel)
-        if edge and edge.source in graph_nodes and edge.target in graph_nodes:
-            graph_edges[edge.id] = edge
-
-    return GraphSubset(nodes=list(graph_nodes.values()), edges=list(graph_edges.values()))
-
-
 def _query_subset(cypher: str, **params: Any) -> GraphSubset:
     driver = get_driver()
     with driver.session() as session:
         record = session.run(cypher, **params).single()
     if record is None:
         return GraphSubset()
-    return _records_to_subset(list(record["nodes"] or []), list(record["rels"] or []))
-
-
-def build_publication_star(chunks: list[dict[str, Any]]) -> GraphSubset:
-    """Build a small deterministic graph from vector results when entity graph is off."""
-    center = GraphNode(
-        id="query",
-        label="Query",
-        type=EntityType.PROPERTY,
-        name="Запрос",
-        properties={},
-    )
-    nodes: dict[str, GraphNode] = {center.id: center}
-    edges: list[GraphEdge] = []
-
-    for row in chunks:
-        doc_id = str(row.get("doc_id") or "")
-        if not doc_id or doc_id in nodes:
-            continue
-        title = str(row.get("title") or doc_id)
-        nodes[doc_id] = GraphNode(
-            id=doc_id,
-            label="Publication",
-            type=EntityType.PUBLICATION,
-            name=title,
-            properties={
-                "year": row.get("year"),
-                "venue": row.get("venue"),
-                "doc_type": row.get("doc_type"),
-                "score": row.get("score"),
-            },
-        )
-        edges.append(
-            GraphEdge(
-                id=f"query:{doc_id}",
-                source="query",
-                target=doc_id,
-                type=RelationType.RELATES_TO,
-                properties={"score": row.get("score")},
-            )
-        )
-
-    return GraphSubset(nodes=list(nodes.values()), edges=edges)
+    return records_to_subset(list(record["nodes"] or []), list(record["rels"] or []))
 
 
 def expand_chunks_1hop(chunk_ids: list[str], min_confidence: float) -> GraphSubset:
