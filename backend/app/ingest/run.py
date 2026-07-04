@@ -33,7 +33,7 @@ DEFAULT_CORPUS_PREFIX = "raw/Задача 2. Научный клубок"
 MAX_FILE_BYTES = 200 * 1024 * 1024
 MAX_PDF_PAGES = 500
 MANIFEST_FLUSH_EVERY = 10
-SUPPORTED_SUFFIXES = {".pdf", ".docx"}
+SUPPORTED_SUFFIXES = {".pdf", ".docx", ".pptx", ".potx"}
 
 
 @dataclass
@@ -191,6 +191,7 @@ def process_local_file(
     result, noise_dropped, reference_texts = parse_file(local_path)
     source_meta = parse_source_key(source_key)
     author_hint = extract_author_hint(file_name)
+    is_presentation = local_path.suffix.lower() in (".pptx", ".potx")
     chunks = blocks_to_chunks(
       result.blocks,
       doc_id=doc_id,
@@ -200,6 +201,7 @@ def process_local_file(
       venue=source_meta.venue,
       year=source_meta.year,
       doc_type=source_meta.doc_type,
+      presentation=is_presentation,
     )
     chunk_ids = [c.chunk_id for c in chunks]
     assert len(chunk_ids) == len(set(chunk_ids)), (
@@ -232,6 +234,7 @@ def process_local_file(
       source_key=source_key,
       file_hash=file_hash,
       file_metadata_author=result.doc_meta.file_metadata_author,
+      file_metadata_title=result.doc_meta.file_metadata_title,
       author_hint=author_hint,
       created=result.doc_meta.created,
       pages=pages,
@@ -240,6 +243,7 @@ def process_local_file(
       ocr_pages=result.doc_meta.ocr_pages,
       ocr_skipped_pages=result.doc_meta.ocr_skipped_pages,
       ocr_low_yield_pages=result.doc_meta.ocr_low_yield_pages,
+      image_only_slides=result.doc_meta.image_only_slides,
       noise_blocks_dropped=noise_dropped,
       text_chars=text_chars,
       text_chars_per_page=text_chars_per_page,
@@ -365,7 +369,12 @@ def _collect_jobs(
     for base in search_dirs:
       if not base.exists():
         continue
-      for path in list(base.rglob("*.pdf")) + list(base.rglob("*.docx")):
+      for path in (
+        list(base.rglob("*.pdf"))
+        + list(base.rglob("*.docx"))
+        + list(base.rglob("*.pptx"))
+        + list(base.rglob("*.potx"))
+      ):
         if path in seen:
           continue
         seen.add(path)
@@ -415,9 +424,9 @@ def _print_summary(outputs: list[ProcessOutput], total_seconds: float, parsed_di
   print("\n=== Ingest summary ===")
   print(
     f"{'Document':<36} {'Chunks':>7} {'AvgChr':>7} {'Tables':>7} "
-    f"{'OCR':>5} {'Noise':>7} {'Status':>14}"
+    f"{'OCR':>5} {'ImgSl':>5} {'Noise':>7} {'Status':>14}"
   )
-  print("-" * 90)
+  print("-" * 96)
   low_yield_docs: list[str] = []
   scan_low_value_docs: list[str] = []
   for out in outputs:
@@ -425,7 +434,7 @@ def _print_summary(outputs: list[ProcessOutput], total_seconds: float, parsed_di
     avg_chars = f"{m.avg_chunk_chars:.0f}" if m.avg_chunk_chars is not None else "-"
     print(
       f"{out.file_name:<36} {m.chunks:>7} {avg_chars:>7} {m.tables:>7} "
-      f"{m.ocr_pages:>5} {m.noise_blocks_dropped:>7} {m.status:>14}"
+      f"{m.ocr_pages:>5} {m.image_only_slides:>5} {m.noise_blocks_dropped:>7} {m.status:>14}"
     )
     if m.status == "ok" and m.pages and m.pages > 0 and m.chunks / m.pages > 6:
       logger.warning(
@@ -448,7 +457,7 @@ def _print_summary(outputs: list[ProcessOutput], total_seconds: float, parsed_di
       scan_low_value_docs.append(out.file_name)
 
   ok_count = sum(1 for o in outputs if o.meta.status == "ok")
-  print("-" * 90)
+  print("-" * 96)
   print(f"Total files: {len(outputs)} (ok: {ok_count})")
   print(f"Total time: {total_seconds:.1f}s")
   if total_seconds > 0 and outputs:
