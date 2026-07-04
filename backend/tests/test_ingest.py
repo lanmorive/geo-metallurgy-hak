@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from docx import Document
 
-from app.ingest.chunker import blocks_to_chunks
+from app.ingest.chunker import _coalesce_blocks, blocks_to_chunks
 from app.ingest.noise import is_noise
 from app.ingest.parser import parse_file
 from app.ingest.types import Block
@@ -22,6 +22,27 @@ def test_is_noise_rejects_short_gibberish() -> None:
 
 def test_is_noise_allows_short_table_cell() -> None:
   assert not is_noise("12,5", is_table_cell=True)
+
+
+def test_coalesce_slide_page() -> None:
+  blocks = [
+    Block(type="heading", text=f"Title {i}", page=1, section=f"s{i}")
+    for i in range(10)
+  ]
+  coalesced = _coalesce_blocks(blocks)
+  assert len(coalesced) == 1
+  assert "Title 0" in coalesced[0].text
+  assert "Title 9" in coalesced[0].text
+
+
+def test_coalesce_short_blocks_merged() -> None:
+  blocks = [
+    Block(type="paragraph", text="A" * 20, page=1, section="intro"),
+    Block(type="paragraph", text="B" * 30, page=1, section="intro"),
+  ]
+  coalesced = _coalesce_blocks(blocks)
+  assert len(coalesced) == 1
+  assert len(coalesced[0].text) == 51
 
 
 def test_table_is_atomic_chunk() -> None:
@@ -57,6 +78,7 @@ def test_parsed_chunk_schema_roundtrip() -> None:
     lang="ru",
     file_name="f.docx",
     source_key="raw/f.docx",
+    author_hint="Иванов И.И.",
   )
   restored = ParsedChunk.model_validate_json(chunk.model_dump_json())
   assert restored == chunk

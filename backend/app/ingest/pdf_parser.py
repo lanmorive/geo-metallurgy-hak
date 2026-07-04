@@ -245,10 +245,11 @@ def parse_pdf(path: Path) -> ParseResult:
 
   meta = doc.metadata or {}
   doc_meta = DocMeta(
-    author=meta.get("author") or None,
+    file_metadata_author=meta.get("author") or None,
     created=meta.get("creationDate") or None,
     pages=len(doc),
     ocr_pages=ocr_pages,
+    ocr_low_yield_pages=0,
   )
   doc.close()
 
