@@ -69,6 +69,7 @@ class DocType(StrEnum):
     ARTICLE = "article"
     PRESENTATION = "presentation"
     REFERENCE = "reference"
+    JOURNAL_ISSUE = "journal_issue"
 
 
 class Lang(StrEnum):
@@ -198,6 +199,9 @@ class ParsedChunk(BaseModel):
     file_name: str
     source_key: str
     author_hint: str | None = None
+    venue: str | None = None
+    year: int | None = None
+    doc_type: str | None = None
 
 
 class ParsedDocumentMeta(BaseModel):
@@ -214,12 +218,18 @@ class ParsedDocumentMeta(BaseModel):
     chunks: int
     tables: int
     ocr_pages: int
+    ocr_skipped_pages: int = 0
     ocr_low_yield_pages: int = 0
     noise_blocks_dropped: int
     text_chars: int = 0
     text_chars_per_page: float | None = None
+    avg_chunk_chars: float | None = None
     low_yield: bool = False
-    status: Literal["ok", "error", "skipped_too_large"]
+    category: str | None = None
+    venue: str | None = None
+    year: int | None = None
+    doc_type: str | None = None
+    status: Literal["ok", "error", "skipped_too_large", "scan_low_value"]
     error: str | None = None
     processing_seconds: float | None = None
 

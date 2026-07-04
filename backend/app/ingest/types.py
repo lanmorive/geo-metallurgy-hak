@@ -23,7 +23,9 @@ class DocMeta:
     created: str | None = None
     pages: int | None = None
     ocr_pages: int = 0
+    ocr_skipped_pages: int = 0
     ocr_low_yield_pages: int = 0
+    scan_low_value: bool = False
 
 
 @dataclass

@@ -125,6 +125,9 @@ def test_parsed_chunk_schema_roundtrip() -> None:
     file_name="f.docx",
     source_key="raw/f.docx",
     author_hint="Иванов И.И.",
+    venue="Горная промышленность",
+    year=2024,
+    doc_type="journal_issue",
   )
   restored = ParsedChunk.model_validate_json(chunk.model_dump_json())
   assert restored == chunk
