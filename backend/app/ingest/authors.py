@@ -5,12 +5,15 @@ from __future__ import annotations
 import re
 import string
 
-_DOKLAD_RE = re.compile(r"Доклад_(.+)\.(pdf|docx)$", re.IGNORECASE)
+_DOKLAD_RE = re.compile(r"Доклад_(.+)\.(pdf|docx|pptx|potx)$", re.IGNORECASE)
 _SURNAME_INITIALS_RE = re.compile(
   r"^([А-ЯЁ][а-яё]+ [А-ЯЁ]\.? ?[А-ЯЁ]\.?)[ _]"
 )
 _FIO_ANYWHERE_RE = re.compile(
   r"([А-ЯЁ][а-яё]{2,}) ([А-ЯЁ])\.\s?([А-ЯЁ])\.?"
+)
+_UNDERSCORE_INITIALS_RE = re.compile(
+  r"([А-ЯЁ][а-яё]{2,})_([А-ЯЁ])_?([А-ЯЁ])"
 )
 _ENGLISH_NAME_RE = re.compile(r"^([A-Z][a-z]+_[A-Z][a-z]+)_")
 _CYRILLIC_INITIALS_RE = re.compile(
@@ -91,6 +94,11 @@ def extract_author_hint(file_name: str) -> str | None:
   match = _DOKLAD_RE.search(file_name)
   if match:
     return _normalize_author_hint(match.group(1).strip())
+
+  match = _UNDERSCORE_INITIALS_RE.search(file_name)
+  if match:
+    surname, i1, i2 = match.groups()
+    return f"{surname} {i1}.{i2}."
 
   match = _FIO_ANYWHERE_RE.search(file_name)
   if match:

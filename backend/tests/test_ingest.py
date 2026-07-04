@@ -130,6 +130,17 @@ def test_extract_author_hint_english() -> None:
   assert extract_author_hint("Nicole_Roocke_report.pdf") == "Nicole Roocke"
 
 
+
+def test_extract_author_hint_underscore_initials() -> None:
+  assert extract_author_hint("Цымбулов_Л_Б_доклад.pptx") == "Цымбулов Л.Б."
+
+
+def test_extract_author_hint_em_dash() -> None:
+  assert (
+    extract_author_hint("Переработка рудных образований океана — Цымбулов Л.Б.pptx")
+    == "Цымбулов Л.Б."
+  )
+
 def test_parse_source_key_journal() -> None:
   meta = parse_source_key(
     "raw/Задача 2. Научный клубок/Источники информации/Журналы/Горная промышленность/2024/article.pdf"
