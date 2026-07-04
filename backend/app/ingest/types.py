@@ -20,12 +20,14 @@ class Block:
 @dataclass
 class DocMeta:
     file_metadata_author: str | None = None
+    file_metadata_title: str | None = None
     created: str | None = None
     pages: int | None = None
     ocr_pages: int = 0
     ocr_skipped_pages: int = 0
     ocr_low_yield_pages: int = 0
     scan_low_value: bool = False
+    image_only_slides: int = 0
 
 
 @dataclass
