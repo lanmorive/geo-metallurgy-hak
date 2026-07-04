@@ -15,6 +15,7 @@ from app.ingest.chunker import (
   _merge_small_text_chunks,
   blocks_to_chunks,
 )
+from app.ingest.pptx_parser import parse_pptx
 from app.ingest.noise import is_noise
 from app.ingest.parser import parse_file
 from app.ingest.source_meta import parse_source_key
@@ -130,7 +131,6 @@ def test_extract_author_hint_english() -> None:
   assert extract_author_hint("Nicole_Roocke_report.pdf") == "Nicole Roocke"
 
 
-
 def test_extract_author_hint_underscore_initials() -> None:
   assert extract_author_hint("Цымбулов_Л_Б_доклад.pptx") == "Цымбулов Л.Б."
 
@@ -140,6 +140,7 @@ def test_extract_author_hint_em_dash() -> None:
     extract_author_hint("Переработка рудных образований океана — Цымбулов Л.Б.pptx")
     == "Цымбулов Л.Б."
   )
+
 
 def test_parse_source_key_journal() -> None:
   meta = parse_source_key(
@@ -341,3 +342,46 @@ def test_parse_docx_with_table(tmp_path: Path) -> None:
   assert chunks
   for chunk in chunks:
     ParsedChunk.model_validate(chunk)
+
+
+def _make_sample_pptx(path: Path) -> None:
+  from pptx import Presentation
+
+  prs = Presentation()
+  slide1 = prs.slides.add_slide(prs.slide_layouts[1])
+  slide1.shapes.title.text = "Заголовок слайда один"
+  slide1.placeholders[1].text = "Основной текст первого слайда презентации."
+  slide1.notes_slide.notes_text_frame.text = "Заметки докладчика к первому слайду."
+
+  slide2 = prs.slides.add_slide(prs.slide_layouts[1])
+  slide2.shapes.title.text = "Второй слайд"
+  slide2.placeholders[1].text = "Содержание второго слайда с достаточным текстом."
+
+  prs.slides.add_slide(prs.slide_layouts[6])
+
+  prs.save(str(path))
+
+
+def test_parse_pptx_slides(tmp_path: Path) -> None:
+  path = tmp_path / "sample.pptx"
+  _make_sample_pptx(path)
+
+  result = parse_pptx(path)
+  assert result.doc_meta.pages == 3
+  assert result.doc_meta.image_only_slides == 1
+
+  pages = {b.page for b in result.blocks}
+  assert pages == {1, 2}
+
+  headings = [b for b in result.blocks if b.type == "heading"]
+  assert len(headings) == 2
+  assert all(b.level == 2 for b in headings)
+
+  notes = [b for b in result.blocks if b.text.startswith("[заметки]")]
+  assert len(notes) == 1
+  assert "докладчика" in notes[0].text
+
+  parsed, noise, refs = parse_file(path)
+  assert noise >= 0
+  assert not refs
+
