@@ -170,16 +170,19 @@ def test_ocr_skipped_when_tesseract_missing(monkeypatch: pytest.MonkeyPatch, tmp
 
   from app.ingest import pdf_parser
 
-  pdf_path = tmp_path / "blank.pdf"
+  pdf_path = tmp_path / "scan.pdf"
   doc = fitz.open()
-  doc.new_page()
+  page = doc.new_page()
+  pix = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 100, 100), 1)
+  pix.clear_with(255)
+  page.insert_image(page.rect, pixmap=pix)
   doc.save(str(pdf_path))
   doc.close()
 
   monkeypatch.setattr(pdf_parser, "_tesseract_available", lambda: False)
   result = pdf_parser.parse_pdf(pdf_path)
   assert result.doc_meta.ocr_pages == 0
-  assert result.blocks == []
+  assert result.doc_meta.ocr_skipped_pages >= 1
 
 
 def test_parse_docx_with_table(tmp_path: Path) -> None:
