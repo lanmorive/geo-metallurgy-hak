@@ -1,4 +1,4 @@
-.PHONY: up down ingest extract load-graph test seed-demo s3-push s3-pull
+.PHONY: up down ingest extract load-graph test seed-demo s3-push s3-pull llm-up llm-smoke
 
 up:
 	docker compose up -d --build
@@ -26,3 +26,10 @@ s3-push:
 
 s3-pull:
 	PYTHONPATH=backend backend/.venv/bin/python scripts/run_pipeline.py --pull-s3
+
+llm-up:
+	docker compose --profile local-llm up -d vllm
+
+llm-smoke:
+	@set -a && [ -f .env ] && . ./.env; set +a; \
+	python3 scripts/llm_smoke.py

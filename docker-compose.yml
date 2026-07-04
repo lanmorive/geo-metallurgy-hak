@@ -22,7 +22,7 @@ services:
     build:
       context: ./backend
     ports:
-      - "8000:8000"
+      - "8001:8000"
     env_file:
       - .env
     environment:
@@ -42,7 +42,7 @@ services:
     ports:
       - "5173:5173"
     environment:
-      VITE_API_URL: http://localhost:8000
+      VITE_API_URL: http://localhost:8001
       VITE_USE_MOCKS: ${VITE_USE_MOCKS:-0}
     volumes:
       - ./frontend:/app
@@ -50,5 +50,25 @@ services:
     depends_on:
       - backend
 
+  vllm:
+    image: vllm/vllm-openai:latest
+    profiles: ["local-llm"]
+    gpus: all
+    ports:
+      - "8000:8000"
+    command: >
+      --model ${VLLM_MODEL:-Qwen/Qwen2.5-14B-Instruct-AWQ}
+      --max-model-len 8192
+      --gpu-memory-utilization 0.92
+    volumes:
+      - huggingface_cache:/root/.cache/huggingface
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8000/v1/models || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+
 volumes:
   neo4j_data:
+  huggingface_cache:
