@@ -6,11 +6,22 @@ import re
 
 _ALNUM_RE = re.compile(r"[а-яА-Яa-zA-Z0-9]")
 _WORD_RE = re.compile(r"\S+")
+_PUBLICATION_MARKERS = (
+  "ISSN",
+  "e-mail :",
+  "Phone :",
+  "Subscription :",
+  "Printing House",
+  "Publication Frequency",
+  "Adress :",
+)
 
 
 def is_noise(text: str, *, is_table_cell: bool = False) -> bool:
   stripped = text.strip()
   if not stripped:
+    return True
+  if sum(1 for marker in _PUBLICATION_MARKERS if marker in text) >= 2:
     return True
   if len(stripped) < 15 and not is_table_cell:
     return True

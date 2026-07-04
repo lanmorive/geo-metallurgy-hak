@@ -26,6 +26,15 @@ def test_is_noise_allows_short_table_cell() -> None:
   assert not is_noise("12,5", is_table_cell=True)
 
 
+def test_is_noise_publication_metadata() -> None:
+  text = (
+    "ISSN 1609-9192 (print)\n"
+    "e-mail : editor@example.com\n"
+    "Phone : +7 (495) 123-45-67"
+  )
+  assert is_noise(text)
+
+
 def test_extract_author_hint_doklad() -> None:
   assert extract_author_hint("Доклад_Румянцев А.Е.pdf") == "Румянцев А.Е."
 
