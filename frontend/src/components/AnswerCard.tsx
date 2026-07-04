@@ -81,6 +81,7 @@ export default function AnswerCard({
   )
 
   const consensusCount = countConsensusSources(response.citations)
+  const showConsensus = response.meta.mode === 'full' && consensusCount > 0
   const hasContradictions = response.contradictions.length > 0
   const hasExperts = response.recommended_experts.length > 0
   const isEmptyResult = response.citations.length === 0
@@ -138,9 +139,9 @@ export default function AnswerCard({
         </ReactMarkdown>
       </div>
 
-      {(consensusCount > 0 || hasContradictions || response.knowledge_gaps.length > 0) && (
+      {(showConsensus || hasContradictions || response.knowledge_gaps.length > 0) && (
       <div className="px-4 pb-3 flex flex-wrap gap-1.5">
-        {consensusCount > 0 && (
+        {showConsensus && (
           <span className="inline-flex items-center px-2.5 py-1 rounded-pill text-xs bg-semantic-consensus-bg text-semantic-consensus-text">
             ✓ Консенсус: {consensusCount} источников
           </span>
