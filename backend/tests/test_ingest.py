@@ -8,7 +8,13 @@ import pytest
 from docx import Document
 
 from app.ingest.authors import extract_author_hint, fix_file_metadata_author
-from app.ingest.chunker import _coalesce_blocks, blocks_to_chunks
+from app.ingest.chunker import (
+  MIN_TEXT_CHUNK,
+  _coalesce_blocks,
+  _dedupe_repeated_lines,
+  _merge_small_text_chunks,
+  blocks_to_chunks,
+)
 from app.ingest.noise import is_noise
 from app.ingest.parser import parse_file
 from app.ingest.source_meta import parse_source_key
@@ -33,6 +39,75 @@ def test_is_noise_publication_metadata() -> None:
     "Phone : +7 (495) 123-45-67"
   )
   assert is_noise(text)
+
+
+def test_dedupe_repeated_lines() -> None:
+  repeated = "Russian Mining Industry Journal is a peer-reviewed publication"
+  text = f"{repeated}\nКороткая\n{repeated}\nУникальная строка побольше двадцати символов"
+  deduped = _dedupe_repeated_lines(text)
+  assert deduped.count(repeated) == 1
+  assert "Уникальная строка побольше двадцати символов" in deduped
+
+
+def test_chunk_id_unique_and_sequential() -> None:
+  blocks = [
+    Block(
+      type="paragraph",
+      text="\n".join(f"Параграф номер {i} с достаточным количеством слов для чанкинга." for i in range(80)),
+      section="intro",
+      page=1,
+    ),
+    Block(
+      type="table",
+      text="| A | B |\n| --- | --- |\n| 1 | 2 |",
+      section="intro",
+      page=2,
+    ),
+    Block(
+      type="paragraph",
+      text="\n".join(f"Продолжение текста параграф {i} для второй секции документа." for i in range(80)),
+      section="body",
+      page=3,
+    ),
+  ]
+  doc_id = "doc_seq_test"
+  chunks = blocks_to_chunks(
+    blocks,
+    doc_id=doc_id,
+    file_name="test.pdf",
+    source_key="raw/test.pdf",
+  )
+  chunk_ids = [c.chunk_id for c in chunks]
+  assert len(chunk_ids) == len(set(chunk_ids))
+  for seq, chunk_id in enumerate(chunk_ids):
+    assert chunk_id == f"{doc_id}_{seq:05d}"
+
+
+def test_chunk_paragraph_boundaries() -> None:
+  blocks = [
+    Block(
+      type="paragraph",
+      text="\n".join(
+        f"Строка {i}: содержательный параграф документа с уникальным началом слова номер {i}."
+        for i in range(120)
+      ),
+      section="article",
+      page=1,
+    ),
+  ]
+  chunks = blocks_to_chunks(
+    blocks,
+    doc_id="doc_boundary",
+    file_name="test.pdf",
+    source_key="raw/test.pdf",
+  )
+  assert len(chunks) >= 2
+  broken_prefixes = ("ssia", "ibuted", "uted")
+  for chunk in chunks:
+    first_line = chunk.text.split("\n", 1)[0].strip()
+    assert first_line
+    for prefix in broken_prefixes:
+      assert not first_line.startswith(prefix), f"Broken word start: {first_line!r}"
 
 
 def test_extract_author_hint_doklad() -> None:
@@ -102,6 +177,48 @@ def test_coalesce_short_blocks_merged() -> None:
   coalesced = _coalesce_blocks(blocks)
   assert len(coalesced) == 1
   assert len(coalesced[0].text) == 51
+
+
+def test_merge_small_text_chunks_invariant() -> None:
+  chunks = [
+    ParsedChunk(
+      doc_id="doc_x",
+      chunk_id="doc_x_00001",
+      text="a" * 100,
+      kind="text",
+      section="s1",
+      page=1,
+      lang="ru",
+      file_name="f.pdf",
+      source_key="raw/f.pdf",
+    ),
+    ParsedChunk(
+      doc_id="doc_x",
+      chunk_id="doc_x_00002",
+      text="b" * 100,
+      kind="text",
+      section="s2",
+      page=2,
+      lang="ru",
+      file_name="f.pdf",
+      source_key="raw/f.pdf",
+    ),
+    ParsedChunk(
+      doc_id="doc_x",
+      chunk_id="doc_x_00003",
+      text="c" * 150,
+      kind="text",
+      section="s3",
+      page=3,
+      lang="ru",
+      file_name="f.pdf",
+      source_key="raw/f.pdf",
+    ),
+  ]
+  merged = _merge_small_text_chunks(chunks)
+  text_chunks = [c for c in merged if c.kind == "text"]
+  assert len(text_chunks) == 1
+  assert len(text_chunks[0].text) >= MIN_TEXT_CHUNK
 
 
 def test_parsed_chunk_author_hint() -> None:

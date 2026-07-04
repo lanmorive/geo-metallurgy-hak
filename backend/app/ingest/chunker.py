@@ -14,10 +14,11 @@ from app.schemas.ontology import ParsedChunk
 logger = logging.getLogger(__name__)
 
 CHUNK_SIZE = 1200
-CHUNK_OVERLAP = 150
-COALESCE_MAX = 900
+COALESCE_MAX = 1150
 COALESCE_MIN_STANDALONE = 40
 SLIDE_AVG_BLOCK_LEN = 120
+MIN_TEXT_CHUNK = 300
+CROSS_SECTION_MERGE_TARGET = 1200
 
 
 def _detect_lang(text: str) -> str:
@@ -211,78 +212,217 @@ def _coalesce_blocks(blocks: list[Block]) -> list[Block]:
   return _attach_orphans(coalesced)
 
 
+def _merge_two_chunks(first: ParsedChunk, second: ParsedChunk) -> ParsedChunk:
+  return first.model_copy(
+    update={"text": f"{first.text}\n\n{second.text}".strip()}
+  )
+
+
+def _merge_small_text_chunks(chunks: list[ParsedChunk]) -> list[ParsedChunk]:
+  if not chunks:
+    return chunks
+
+  merged: list[ParsedChunk] = []
+  i = 0
+  while i < len(chunks):
+    chunk = chunks[i]
+    if chunk.kind == "table":
+      merged.append(chunk)
+      i += 1
+      continue
+
+    accumulated = chunk
+    j = i + 1
+    while len(accumulated.text) < MIN_TEXT_CHUNK and j < len(chunks):
+      nxt = chunks[j]
+      if nxt.kind == "table":
+        break
+      candidate = _merge_two_chunks(accumulated, nxt)
+      if len(candidate.text) > CROSS_SECTION_MERGE_TARGET and len(accumulated.text) >= MIN_TEXT_CHUNK:
+        break
+      accumulated = candidate
+      j += 1
+      if len(accumulated.text) >= MIN_TEXT_CHUNK:
+        break
+
+    merged.append(accumulated)
+    i = j if j > i + 1 else i + 1
+
+  text_chunks = [c for c in merged if c.kind == "text"]
+  if len(text_chunks) <= 1:
+    return merged
+
+  result: list[ParsedChunk] = []
+  for chunk in merged:
+    if chunk.kind == "table":
+      result.append(chunk)
+      continue
+    if len(chunk.text) >= MIN_TEXT_CHUNK:
+      result.append(chunk)
+      continue
+    if result:
+      prev = result[-1]
+      if prev.kind == "text":
+        result[-1] = _merge_two_chunks(prev, chunk)
+        continue
+    result.append(chunk)
+
+  text_chunks = [c for c in result if c.kind == "text"]
+  if len(text_chunks) > 1:
+    final: list[ParsedChunk] = []
+    for chunk in result:
+      if chunk.kind == "text" and len(chunk.text) < MIN_TEXT_CHUNK and final:
+        prev = final[-1]
+        if prev.kind == "text":
+          final[-1] = _merge_two_chunks(prev, chunk)
+          continue
+      final.append(chunk)
+    return final
+
+  return result
+
+
+def _dedupe_repeated_lines(text: str) -> str:
+  seen: set[str] = set()
+  kept: list[str] = []
+  for line in text.split("\n"):
+    key = line.strip()
+    if len(key) > 20:
+      if key in seen:
+        continue
+      seen.add(key)
+    kept.append(line)
+  return "\n".join(kept)
+
+
+def _renumber_chunk_ids(chunks: list[ParsedChunk], doc_id: str) -> list[ParsedChunk]:
+  return [
+    chunk.model_copy(update={"chunk_id": f"{doc_id}_{seq:05d}"})
+    for seq, chunk in enumerate(chunks)
+  ]
+
+
+def _paragraphs_from_blocks(
+  indexed_blocks: list[tuple[int, Block]],
+) -> list[tuple[str, int]]:
+  paragraphs: list[tuple[str, int]] = []
+  for idx, block in indexed_blocks:
+    for line in block.text.split("\n"):
+      if line.strip():
+        paragraphs.append((line, idx))
+  return paragraphs
+
+
+def _chunk_text_length(lines: list[str]) -> int:
+  return len("\n".join(lines)) if lines else 0
+
+
 def _chunk_paragraphs(
   indexed_blocks: list[tuple[int, Block]],
   *,
   doc_id: str,
-  section: str,
   file_name: str,
   source_key: str,
   author_hint: str | None,
+  venue: str | None,
+  year: int | None,
+  doc_type: str | None,
 ) -> list[ParsedChunk]:
   if not indexed_blocks:
     return []
 
-  parts: list[str] = []
-  part_start_idx: list[int] = []
-  for idx, block in indexed_blocks:
-    parts.append(block.text)
-    part_start_idx.append(idx)
-
-  full_text = "\n\n".join(parts)
-  if not full_text.strip():
+  paragraphs = _paragraphs_from_blocks(indexed_blocks)
+  if not paragraphs:
     return []
 
+  block_by_idx = {idx: block for idx, block in indexed_blocks}
   chunks: list[ParsedChunk] = []
-  offsets = []
+
+  def _emit(batch_indices: list[int]) -> None:
+    if not batch_indices:
+      return
+    lines = [paragraphs[p_idx][0] for p_idx in batch_indices]
+    chunk_text = _dedupe_repeated_lines("\n".join(lines).strip())
+    if not chunk_text:
+      return
+    start_idx = paragraphs[batch_indices[0]][1]
+    start_block = block_by_idx[start_idx]
+    page = next(
+      (b.page for i, b in indexed_blocks if i == start_idx and b.page is not None),
+      next((b.page for _, b in indexed_blocks if b.page is not None), None),
+    )
+    chunks.append(
+      ParsedChunk(
+        doc_id=doc_id,
+        chunk_id=f"{doc_id}_00000",
+        text=chunk_text,
+        kind="text",
+        section=start_block.section,
+        page=page,
+        lang=_detect_lang(chunk_text),
+        file_name=file_name,
+        source_key=source_key,
+        author_hint=author_hint,
+        venue=venue,
+        year=year,
+        doc_type=doc_type,
+      )
+    )
+
+  n = len(paragraphs)
   pos = 0
-  for i, part in enumerate(parts):
-    offsets.append((pos, part_start_idx[i]))
-    pos += len(part) + 2
+  pending_overlap: int | None = None
+  prev_window_start: int | None = None
 
-  start = 0
-  text_len = len(full_text)
+  while pending_overlap is not None or pos < n:
+    if pending_overlap is not None:
+      window_start = pending_overlap
+      batch_indices = [pending_overlap]
+      pending_overlap = None
+      cursor = window_start + 1
+    else:
+      window_start = pos
+      batch_indices = []
+      cursor = pos
 
-  while start < text_len:
-    end = min(start + CHUNK_SIZE, text_len)
-    if end < text_len:
-      boundary = full_text.rfind("\n\n", start, end)
-      if boundary > start:
-        end = boundary
-      else:
-        boundary = full_text.rfind("\n", start, end)
-        if boundary > start:
-          end = boundary
-
-    chunk_text = full_text[start:end].strip()
-    if chunk_text:
-      start_idx = indexed_blocks[0][0]
-      for off, block_idx in reversed(offsets):
-        if off <= start:
-          start_idx = block_idx
-          break
-      page = next(
-        (b.page for i, b in indexed_blocks if i == start_idx and b.page is not None),
-        next((b.page for _, b in indexed_blocks if b.page is not None), None),
+    if prev_window_start is not None and window_start <= prev_window_start:
+      logger.error(
+        "Chunk window did not advance for %s: %s -> %s",
+        doc_id,
+        prev_window_start,
+        window_start,
       )
-      chunks.append(
-        ParsedChunk(
-          doc_id=doc_id,
-          chunk_id=f"{doc_id}_{start_idx:05d}",
-          text=chunk_text,
-          kind="text",
-          section=section,
-          page=page,
-          lang=_detect_lang(chunk_text),
-          file_name=file_name,
-          source_key=source_key,
-          author_hint=author_hint,
-        )
-      )
-
-    if end >= text_len:
       break
-    start = max(end - CHUNK_OVERLAP, start + 1)
+    prev_window_start = window_start
+
+    if not batch_indices:
+      if cursor >= n:
+        break
+      batch_indices = [cursor]
+      cursor += 1
+
+    if len(batch_indices) == 1 and len(paragraphs[batch_indices[0]][0]) >= CHUNK_SIZE:
+      _emit(batch_indices)
+      pos = cursor
+      continue
+
+    while cursor < n:
+      trial_lines = [paragraphs[p_idx][0] for p_idx in batch_indices + [cursor]]
+      if batch_indices and _chunk_text_length(trial_lines) >= CHUNK_SIZE:
+        break
+      batch_indices.append(cursor)
+      cursor += 1
+
+    _emit(batch_indices)
+    pos = cursor
+
+    if pos >= n:
+      break
+
+    if len(batch_indices) > 1:
+      pending_overlap = batch_indices[-1]
+    else:
+      pending_overlap = None
 
   return chunks
 
@@ -294,21 +434,44 @@ def blocks_to_chunks(
   file_name: str,
   source_key: str,
   author_hint: str | None = None,
+  venue: str | None = None,
+  year: int | None = None,
+  doc_type: str | None = None,
 ) -> list[ParsedChunk]:
   """Разбить блоки на ParsedChunk (таблицы — атомарные чанки)."""
   chunkable = [b for b in blocks if b.section != "references"]
   chunkable = _coalesce_blocks(chunkable)
   chunks: list[ParsedChunk] = []
-
+  text_run: list[tuple[int, Block]] = []
   prev_paragraph: str | None = None
+
+  def _flush_text_run() -> None:
+    nonlocal text_run
+    if text_run:
+      chunks.extend(
+        _chunk_paragraphs(
+          text_run,
+          doc_id=doc_id,
+          file_name=file_name,
+          source_key=source_key,
+          author_hint=author_hint,
+          venue=venue,
+          year=year,
+          doc_type=doc_type,
+        )
+      )
+      text_run = []
+
   for idx, block in enumerate(chunkable):
     if block.type == "table":
+      _flush_text_run()
       context = prev_paragraph or ""
       text = f"{context}\n\n{block.text}".strip() if context else block.text
+      text = _dedupe_repeated_lines(text)
       chunks.append(
         ParsedChunk(
           doc_id=doc_id,
-          chunk_id=f"{doc_id}_{idx:05d}",
+          chunk_id=f"{doc_id}_00000",
           text=text,
           kind="table",
           section=block.section,
@@ -317,33 +480,21 @@ def blocks_to_chunks(
           file_name=file_name,
           source_key=source_key,
           author_hint=author_hint,
+          venue=venue,
+          year=year,
+          doc_type=doc_type,
         )
       )
       prev_paragraph = None
       continue
 
     if block.type == "paragraph":
+      text_run.append((idx, block))
       prev_paragraph = block.text
 
-  text_sections: dict[str, list[tuple[int, Block]]] = {}
-  for idx, block in enumerate(chunkable):
-    if block.type in ("paragraph", "heading"):
-      text_sections.setdefault(block.section, []).append((idx, block))
-
-  for section, indexed in text_sections.items():
-    chunks.extend(
-      _chunk_paragraphs(
-        indexed,
-        doc_id=doc_id,
-        section=section,
-        file_name=file_name,
-        source_key=source_key,
-        author_hint=author_hint,
-      )
-    )
-
-  chunks.sort(key=lambda c: c.chunk_id)
-  return chunks
+  _flush_text_run()
+  merged = _merge_small_text_chunks(chunks)
+  return _renumber_chunk_ids(merged, doc_id)
 
 
 def write_jsonl(chunks: list[ParsedChunk], out_path: Path) -> None:
