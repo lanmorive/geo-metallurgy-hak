@@ -14,6 +14,8 @@ class Settings(BaseSettings):
     llm_timeout: int = 120
     llm_max_concurrency: int = 8
     embedding_model: str = "BAAI/bge-m3"
+    embed_device: str = "cpu"
+    embed_batch: int = 32
     backend_cors_origins: str = "http://localhost:5173"
     data_dir: str = "/data"
     s3_endpoint_url: str = ""
