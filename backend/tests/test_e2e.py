@@ -95,7 +95,7 @@ def test_query_maps_year_filter(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     assert response.status_code == 200
     assert captured["top_k"] == 10
-    assert captured["filters"] == {"year_min": 2024, "year_max": 2024}
+    assert captured["filters"] == {"year_min": 2024, "year_max": 2024, "min_confidence": 0.0}
 
 
 def test_query_empty_results(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -1,4 +1,4 @@
-.PHONY: up down init-db embed-only ingest extract extract-core extract-sample load-chunks load-graph load-graph-sample test seed-demo s3-push s3-pull s3-push-embeddings s3-pull-embeddings llm-up llm-smoke
+.PHONY: up down init-db embed-only ingest extract extract-core extract-sample load-chunks load-graph load-graph-sample test seed-demo s3-push s3-pull s3-push-embeddings s3-pull-embeddings s3-push-extracted s3-pull-extracted llm-up llm-smoke t2c-sample synth-sample
 
 up:
 	docker compose up -d --build
@@ -51,9 +51,21 @@ s3-push-embeddings:
 s3-pull-embeddings:
 	PYTHONPATH=backend backend/.venv/bin/python scripts/run_pipeline.py --pull-embeddings
 
+s3-push-extracted:
+	PYTHONPATH=backend backend/.venv/bin/python scripts/run_pipeline.py --push-extracted
+
+s3-pull-extracted:
+	PYTHONPATH=backend backend/.venv/bin/python scripts/run_pipeline.py --pull-extracted
+
 llm-up:
 	docker compose --profile local-llm up -d vllm
 
 llm-smoke:
 	@set -a && [ -f .env ] && . ./.env; set +a; \
 	python3 scripts/llm_smoke.py
+
+t2c-sample:
+	PYTHONPATH=backend backend/.venv/bin/python backend/scripts/t2c_sample.py
+
+synth-sample:
+	PYTHONPATH=backend backend/.venv/bin/python backend/scripts/synth_sample.py

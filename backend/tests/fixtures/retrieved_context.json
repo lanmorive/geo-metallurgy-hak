@@ -1,0 +1,140 @@
+{
+  "chunks": [
+    {
+      "chunk_id": "chunk-desal-001",
+      "doc_id": "doc_462e8ea7adf4",
+      "title": "Методы обессоливения промышленных сточных вод",
+      "year": 2022,
+      "text": "При содержании сульфатов 200–280 мг/л наиболее эффективным оказался обратный осмос с предварительной коагуляцией. Сухой остаток после обработки снижался до 850 мг/дм³. Установка работала при давлении 1.2 МПа.",
+      "score": 0.92,
+      "geography": "RU",
+      "venue": "отчёт НИР",
+      "doc_type": "report"
+    },
+    {
+      "chunk_id": "chunk-desal-002",
+      "doc_id": "doc_45bfaf3307fb",
+      "title": "Ионный обмен при очистке воды от сульфатов",
+      "year": 2020,
+      "text": "Ионообменная колонна на катионите позволяет снизить концентрацию сульфатов с 250 до 120 мг/л. Регенерация проводилась раствором NaCl 10%. Сухой остаток исходной воды составлял 980 мг/дм³.",
+      "score": 0.88,
+      "geography": "RU",
+      "venue": "журнал",
+      "doc_type": "article"
+    },
+    {
+      "chunk_id": "chunk-desal-003",
+      "doc_id": "doc_44feb6a03be0",
+      "title": "Комбинированная схема обессоливания",
+      "year": 2021,
+      "text": "Комбинация нанофильтрации и обратного осмоса применялась для воды с сульфатами 220–300 мг/л. Энергозатраты составили 2.1 кВт·ч/м³. Сухой остаток после двухступенчатой схемы — 720 мг/дм³.",
+      "score": 0.85,
+      "geography": "RU",
+      "venue": "конференция",
+      "doc_type": "presentation"
+    },
+    {
+      "chunk_id": "chunk-desal-004",
+      "doc_id": "doc_44d793fe3e25",
+      "title": "Электродиализ для обессоливания",
+      "year": 2019,
+      "text": "Электродиализ показал эффективность при низком содержании сульфатов до 150 мг/л, но при 250 мг/л требовалась частая смена мембран. Сухой остаток снижался до 900 мг/дм³.",
+      "score": 0.79,
+      "geography": "WORLD",
+      "venue": "статья",
+      "doc_type": "article"
+    },
+    {
+      "chunk_id": "chunk-desal-005",
+      "doc_id": "doc_44d3f18c891f",
+      "title": "Сравнительный анализ методов обессоливания",
+      "year": 2023,
+      "text": "Сравнение RO, NF и ED для воды с TDS 1200 мг/л показало преимущество RO по степени обессоливания. При сульфатах 200–300 мг/л RO обеспечивает выход ниже 100 мг/л.",
+      "score": 0.87,
+      "geography": "RU",
+      "venue": "отчёт",
+      "doc_type": "report"
+    }
+  ],
+  "cypher_results": [
+    {
+      "type": "Process",
+      "name": "обратный осмос",
+      "parameter": "сульфаты",
+      "op": "range",
+      "value_min": 200,
+      "value_max": 300,
+      "unit": "мг/л",
+      "confidence": 0.85,
+      "sources": [{"doc_id": "doc_462e8ea7adf4", "title": "Методы обессоливания промышленных сточных вод", "year": 2022}]
+    },
+    {
+      "type": "Process",
+      "name": "ионный обмен",
+      "parameter": "сульфаты",
+      "op": "=",
+      "value": 250,
+      "unit": "мг/л",
+      "confidence": 0.78,
+      "sources": [{"doc_id": "doc_45bfaf3307fb", "title": "Ионный обмен при очистке воды от сульфатов", "year": 2020}]
+    },
+    {
+      "type": "Process",
+      "name": "нанофильтрация + RO",
+      "parameter": "сухой остаток",
+      "op": "<=",
+      "value": 1000,
+      "unit": "мг/дм³",
+      "confidence": 0.82,
+      "sources": [{"doc_id": "doc_44feb6a03be0", "title": "Комбинированная схема обессоливания", "year": 2021}]
+    }
+  ],
+  "nodes": [
+    {
+      "id": "обратный осмос",
+      "label": "Process",
+      "type": "Process",
+      "name": "обратный осмос",
+      "properties": {"confidence": 0.85, "geography": "RU"}
+    },
+    {
+      "id": "ионный обмен",
+      "label": "Process",
+      "type": "Process",
+      "name": "ионный обмен",
+      "properties": {"confidence": 0.78, "geography": "RU"}
+    },
+    {
+      "id": "doc_462e8ea7adf4",
+      "label": "Publication",
+      "type": "Publication",
+      "name": "Методы обессоливания промышленных сточных вод",
+      "properties": {"year": 2022, "doc_id": "doc_462e8ea7adf4"}
+    },
+    {
+      "id": "doc_45bfaf3307fb",
+      "label": "Publication",
+      "type": "Publication",
+      "name": "Ионный обмен при очистке воды от сульфатов",
+      "properties": {"year": 2020, "doc_id": "doc_45bfaf3307fb"}
+    }
+  ],
+  "edges": [
+    {
+      "id": "contradicts-1",
+      "source": "doc_462e8ea7adf4",
+      "target": "doc_45bfaf3307fb",
+      "type": "contradicts",
+      "properties": {
+        "note": "RO снижает сульфаты до <100 мг/л, ионный обмен — только до 120 мг/л при исходных 250 мг/л"
+      }
+    },
+    {
+      "id": "rel-1",
+      "source": "обратный осмос",
+      "target": "doc_462e8ea7adf4",
+      "type": "described_in",
+      "properties": {}
+    }
+  ]
+}

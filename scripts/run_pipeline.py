@@ -98,6 +98,30 @@ def step_pull_embeddings() -> int:
     return 0
 
 
+def step_push_extracted() -> int:
+    from app.storage import get_storage
+
+    storage = get_storage()
+    if not storage.available:
+        logger.warning("S3 not available — nothing to push")
+        return 1
+    count = storage.sync_prefix_up("extracted", DATA_EXTRACTED)
+    logger.info("Pushed %d extracted files to S3", count)
+    return 0
+
+
+def step_pull_extracted() -> int:
+    from app.storage import get_storage
+
+    storage = get_storage()
+    if not storage.available:
+        logger.warning("S3 not available — nothing to pull")
+        return 1
+    count = storage.sync_prefix_down("extracted/", DATA_EXTRACTED)
+    logger.info("Pulled %d extracted files from S3", count)
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Научный клубок pipeline")
     parser.add_argument(
@@ -126,6 +150,16 @@ def main() -> int:
         help="Download embeddings/ from S3 to data/embeddings/ and exit",
     )
     parser.add_argument(
+        "--push-extracted",
+        action="store_true",
+        help="Upload data/extracted/ to S3 and exit",
+    )
+    parser.add_argument(
+        "--pull-extracted",
+        action="store_true",
+        help="Download extracted/ from S3 to data/extracted/ and exit",
+    )
+    parser.add_argument(
         "--from-s3",
         action="store_true",
         help="Before load step, sync extracted/ from S3 to local data/",
@@ -140,6 +174,10 @@ def main() -> int:
         return step_push_embeddings()
     if args.pull_embeddings:
         return step_pull_embeddings()
+    if args.push_extracted:
+        return step_push_extracted()
+    if args.pull_extracted:
+        return step_pull_extracted()
 
     steps = {
         "ingest": step_ingest,
