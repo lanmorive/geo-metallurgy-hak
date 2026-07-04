@@ -45,7 +45,7 @@ def print_counters() -> None:
     coverage = _run_query(
         """
         MATCH (pub:Publication)
-        OPTIONAL MATCH (e)-[:described_in]->(pub)
+        OPTIONAL MATCH (e)-[:DESCRIBED_IN]->(pub)
         WHERE any(l IN labels(e) WHERE l IN $entity_labels)
         WITH pub, count(DISTINCT e) AS entity_count
         RETURN count(pub) AS total,
@@ -120,7 +120,7 @@ def print_suspicious(stop_set: frozenset[str]) -> None:
     orphan_rows = _run_query(
         """
         MATCH (p:Property)
-        WHERE NOT (p)<-[:has_property|operates_at_condition]-()
+        WHERE NOT (p)<-[:HAS_PROPERTY|OPERATES_AT_CONDITION]-()
         RETURN count(p) AS cnt, collect(p.name_norm)[..30] AS examples
         """
     )
@@ -134,7 +134,7 @@ def print_edge_sample() -> None:
     print("\n=== 3. Edge sample (HAS_PROPERTY / OPERATES_AT_CONDITION) ===")
     rows = _run_query(
         """
-        MATCH (src)-[r:has_property|operates_at_condition]->(dst:Property)
+        MATCH (src)-[r:HAS_PROPERTY|OPERATES_AT_CONDITION]->(dst:Property)
         WHERE r.value IS NOT NULL AND r.unit IS NOT NULL AND trim(r.unit) <> ''
         WITH src, r
         ORDER BY rand()

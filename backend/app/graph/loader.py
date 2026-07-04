@@ -99,10 +99,17 @@ _DESCRIBED_IN_CYPHER = """
 UNWIND $rows AS row
 CALL apoc.merge.node([row.label], {name_norm: row.name_norm}, {}, {}) YIELD node AS n
 MATCH (p:Publication {doc_id: row.doc_id})
-MERGE (n)-[r:described_in]->(p)
+MERGE (n)-[r:DESCRIBED_IN]->(p)
 SET r.source_chunk = row.source_chunk
 RETURN count(r) AS cnt
 """
+
+_PUBLICATION_EXISTS_CYPHER = "MATCH (p:Publication {doc_id: $doc_id}) RETURN count(p) AS cnt"
+
+
+def _neo4j_rel_type(value: str) -> str:
+    """Neo4j-конвенция: типы рёбер в UPPERCASE (t2c и synthesis ждут именно их)."""
+    return value.upper()
 
 
 @dataclass
@@ -376,7 +383,7 @@ def phase2_relations(
                         "doc_id": doc_id,
                         "dst_label": dst[0],
                         "dst_norm": dst[1],
-                        "rel_type": rel.type.value,
+                        "rel_type": _neo4j_rel_type(rel.type.value),
                         "props": props,
                     }
                 )
@@ -397,7 +404,7 @@ def phase2_relations(
                         "src_label": src[0],
                         "src_norm": src[1],
                         "doc_id": doc_id,
-                        "rel_type": rel.type.value,
+                        "rel_type": _neo4j_rel_type(rel.type.value),
                         "props": props,
                     }
                 )
@@ -421,29 +428,53 @@ def phase2_relations(
                     "src_norm": src[1],
                     "dst_label": dst[0],
                     "dst_norm": dst[1],
-                    "rel_type": rel.type.value,
+                    "rel_type": _neo4j_rel_type(rel.type.value),
                     "props": props,
                 }
             )
 
     total = 0
     with driver.session() as session:
-        for rows, cypher in (
-            (entity_rels, _MERGE_ENTITY_REL),
-            (entity_to_pub, _MERGE_ENTITY_TO_PUB),
-            (pub_to_entity, _MERGE_PUB_TO_ENTITY),
+        needs_pub = bool(entity_to_pub or pub_to_entity or described_in_rows)
+        if needs_pub:
+            pub_record = session.run(_PUBLICATION_EXISTS_CYPHER, doc_id=doc_id).single()
+            if not pub_record or pub_record["cnt"] == 0:
+                logger.error(
+                    "Publication %s not found: %d pub-linked relations will write 0 rows. "
+                    "Run load-chunks before load-graph.",
+                    doc_id,
+                    len(entity_to_pub) + len(pub_to_entity) + len(described_in_rows),
+                )
+
+        for name, rows, cypher in (
+            ("entity_rels", entity_rels, _MERGE_ENTITY_REL),
+            ("entity_to_pub", entity_to_pub, _MERGE_ENTITY_TO_PUB),
+            ("pub_to_entity", pub_to_entity, _MERGE_PUB_TO_ENTITY),
         ):
             for i in range(0, len(rows), BATCH_SIZE):
                 batch = rows[i : i + BATCH_SIZE]
                 result = session.run(cypher, rows=batch)
                 record = result.single()
-                total += record["cnt"] if record else 0
+                cnt = record["cnt"] if record else 0
+                if batch and cnt == 0:
+                    logger.error("phase2 %s batch wrote 0/%d relations in %s", name, len(batch), doc_id)
+                total += cnt
 
+        described_in_written = 0
         for i in range(0, len(described_in_rows), BATCH_SIZE):
             batch = described_in_rows[i : i + BATCH_SIZE]
             result = session.run(_DESCRIBED_IN_CYPHER, rows=batch)
             record = result.single()
-            total += record["cnt"] if record else 0
+            cnt = record["cnt"] if record else 0
+            described_in_written += cnt
+            total += cnt
+
+        if described_in_rows and described_in_written == 0:
+            logger.error(
+                "phase2 DESCRIBED_IN wrote 0/%d relations in %s (Publication missing?)",
+                len(described_in_rows),
+                doc_id,
+            )
 
     return total, skipped_low_conf_relates_to
 
