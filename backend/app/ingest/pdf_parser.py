@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 import shutil
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from pathlib import Path
 
 import fitz
@@ -12,14 +14,25 @@ import pytesseract
 from pytesseract import TesseractNotFoundError
 
 from app.ingest.authors import fix_file_metadata_author
+from app.ingest.noise import is_noise
 from app.ingest.types import Block, DocMeta, ParseResult
 
 logger = logging.getLogger(__name__)
 
 _TEXT_LAYER_MIN_CHARS = 200
+_OCR_LOW_YIELD_MIN_CHARS = 100
 _HEADING_MAX_LEN = 80
 _BOLD_FLAG = 16  # fitz TEXT_FONT_BOLD
+OCR_DPI = 220
+OCR_POOL_SIZE = 4
 _tesseract_warned = False
+
+
+@dataclass
+class _OcrJob:
+  page_index: int
+  page_num: int
+  check_low_yield: bool
 
 
 def _tesseract_available() -> bool:
@@ -134,7 +147,7 @@ def _ocr_page(page: fitz.Page) -> str | None:
     return None
   import tempfile
 
-  pix = page.get_pixmap(dpi=300)
+  pix = page.get_pixmap(dpi=OCR_DPI)
   with tempfile.NamedTemporaryFile(suffix=".png") as tmp:
     pix.save(tmp.name)
     try:
@@ -144,23 +157,66 @@ def _ocr_page(page: fitz.Page) -> str | None:
       return None
 
 
+def _page_text_len(page_dict: dict) -> int:
+  return sum(
+    len(span.get("text", ""))
+    for block in page_dict.get("blocks", [])
+    if block.get("type") == 0
+    for line in block.get("lines", [])
+    for span in line.get("spans", [])
+  )
+
+
+def _run_ocr_jobs(
+  doc: fitz.Document,
+  jobs: list[_OcrJob],
+) -> dict[int, tuple[str | None, bool]]:
+  """Вернуть page_num -> (ocr_text or None, is_low_yield)."""
+  if not jobs:
+    return {}
+
+  results: dict[int, tuple[str | None, bool]] = {}
+
+  def _process(job: _OcrJob) -> tuple[int, str | None, bool]:
+    page = doc[job.page_index]
+    ocr_text = (_ocr_page(page) or "").strip()
+    if not ocr_text:
+      return job.page_num, None, job.check_low_yield
+    if job.check_low_yield and (
+      is_noise(ocr_text) or len(ocr_text) < _OCR_LOW_YIELD_MIN_CHARS
+    ):
+      return job.page_num, None, True
+    return job.page_num, ocr_text, False
+
+  if not _tesseract_available():
+    _warn_tesseract_missing()
+    for job in jobs:
+      results[job.page_num] = (None, job.check_low_yield)
+    return results
+
+  with ThreadPoolExecutor(max_workers=OCR_POOL_SIZE) as pool:
+    futures = {pool.submit(_process, job): job for job in jobs}
+    for future in as_completed(futures):
+      page_num, ocr_text, is_low_yield = future.result()
+      results[page_num] = (ocr_text, is_low_yield)
+
+  return results
+
+
 def parse_pdf(path: Path) -> ParseResult:
   doc = fitz.open(str(path))
   all_font_sizes: list[float] = []
   page_text_blocks: dict[int, list[dict]] = {}
   ocr_pages = 0
+  ocr_low_yield_pages = 0
+  ocr_jobs: list[_OcrJob] = []
 
   for page_index in range(len(doc)):
     page = doc[page_index]
     page_num = page_index + 1
     page_dict = page.get_text("dict")
-    text_len = sum(
-      len(span.get("text", ""))
-      for block in page_dict.get("blocks", [])
-      if block.get("type") == 0
-      for line in block.get("lines", [])
-      for span in line.get("spans", [])
-    )
+    text_len = _page_text_len(page_dict)
+    images = page.get_images()
 
     if text_len > _TEXT_LAYER_MIN_CHARS:
       blocks = _blocks_from_dict(page_dict, page_num)
@@ -168,22 +224,38 @@ def parse_pdf(path: Path) -> ParseResult:
         if b["font_size"] > 0:
           all_font_sizes.append(b["font_size"])
       page_text_blocks[page_num] = blocks
+    elif not images and text_len == 0:
+      continue
     else:
       logger.warning("OCR page %d in %s", page_num, path.name)
       ocr_pages += 1
-      ocr_text = (_ocr_page(page) or "").strip()
-      if ocr_text:
-        page_text_blocks[page_num] = [
-          {
-            "text": ocr_text,
-            "bbox": page.rect,
-            "page": page_num,
-            "font_size": 0.0,
-            "bold": False,
-            "y0": 0.0,
-            "x0": 0.0,
-          }
-        ]
+      check_low_yield = bool(images) and text_len < _TEXT_LAYER_MIN_CHARS
+      ocr_jobs.append(
+        _OcrJob(
+          page_index=page_index,
+          page_num=page_num,
+          check_low_yield=check_low_yield,
+        )
+      )
+
+  ocr_results = _run_ocr_jobs(doc, ocr_jobs)
+  for page_num, (ocr_text, is_low_yield) in ocr_results.items():
+    if is_low_yield:
+      ocr_low_yield_pages += 1
+      continue
+    if ocr_text:
+      page = doc[page_num - 1]
+      page_text_blocks[page_num] = [
+        {
+          "text": ocr_text,
+          "bbox": page.rect,
+          "page": page_num,
+          "font_size": 0.0,
+          "bold": False,
+          "y0": 0.0,
+          "x0": 0.0,
+        }
+      ]
 
   median_font = sorted(all_font_sizes)[len(all_font_sizes) // 2] if all_font_sizes else 12.0
 
@@ -250,7 +322,7 @@ def parse_pdf(path: Path) -> ParseResult:
     created=meta.get("creationDate") or None,
     pages=len(doc),
     ocr_pages=ocr_pages,
-    ocr_low_yield_pages=0,
+    ocr_low_yield_pages=ocr_low_yield_pages,
   )
   doc.close()
 

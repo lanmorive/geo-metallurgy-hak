@@ -143,7 +143,7 @@ def test_ocr_skipped_when_tesseract_missing(monkeypatch: pytest.MonkeyPatch, tmp
 
   monkeypatch.setattr(pdf_parser, "_tesseract_available", lambda: False)
   result = pdf_parser.parse_pdf(pdf_path)
-  assert result.doc_meta.ocr_pages == 1
+  assert result.doc_meta.ocr_pages == 0
   assert result.blocks == []
 
 
