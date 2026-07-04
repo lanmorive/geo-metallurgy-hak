@@ -157,10 +157,10 @@ def main() -> int:
             auth=(settings.neo4j_user, settings.neo4j_password),
         )
         try:
-            load_jsonl(OUT_PATH, driver)
-            logger.info("Loaded demo graph into Neo4j")
-        except NotImplementedError:
-            logger.warning("Neo4j loader not implemented yet — JSONL saved for manual load")
+            logger.warning(
+                "demo_seed uses legacy GraphExtractionBundle format — "
+                "run extraction or use _sample.jsonl for graph load"
+            )
         finally:
             driver.close()
     except Exception as exc:

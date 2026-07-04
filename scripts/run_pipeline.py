@@ -35,10 +35,7 @@ def step_extract() -> int:
 
 def step_load(from_s3: bool = False) -> int:
     """Загрузка data/extracted/ в Neo4j."""
-    from neo4j import GraphDatabase
-
-    from app.config import settings
-    from app.graph.loader import load_jsonl
+    from app.graph.loader import main as loader_main
     from app.storage import get_storage
 
     storage = get_storage()
@@ -46,25 +43,12 @@ def step_load(from_s3: bool = False) -> int:
         storage.sync_prefix_down("extracted/", DATA_EXTRACTED)
 
     extracted_files = list(DATA_EXTRACTED.glob("*.jsonl"))
+    extracted_files = [f for f in extracted_files if not f.name.startswith("_")]
     if not extracted_files:
         logger.warning("No extracted JSONL in %s", DATA_EXTRACTED)
         return 0
 
-    driver = GraphDatabase.driver(
-        settings.neo4j_uri,
-        auth=(settings.neo4j_user, settings.neo4j_password),
-    )
-    try:
-        for path in extracted_files:
-            logger.info("Loading %s", path.name)
-            try:
-                load_jsonl(path, driver)
-            except NotImplementedError as exc:
-                logger.warning("Load not implemented: %s", exc)
-                return 0
-    finally:
-        driver.close()
-    return 0
+    return loader_main(["--extracted-dir", str(DATA_EXTRACTED)])
 
 
 def step_push_s3() -> int:

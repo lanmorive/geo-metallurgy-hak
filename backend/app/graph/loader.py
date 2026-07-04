@@ -1,201 +1,422 @@
-"""Загрузка JSONL в Neo4j батчами через UNWIND."""
+"""Загрузка ChunkExtractionRecord JSONL в Neo4j (сущности + связи)."""
 
 from __future__ import annotations
 
-import json
+import argparse
+import fnmatch
 import logging
+import sys
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from neo4j import Driver
 
-from app.schemas.ontology import Entity, EntityType, GraphExtractionBundle, Relation
+from app.graph.driver import close_driver, get_driver
+from app.schemas.ontology import (
+    ChunkExtractionRecord,
+    EntityType,
+    ExtractedRelation,
+    RelationType,
+)
 
 logger = logging.getLogger(__name__)
 
+REPO_ROOT = Path(__file__).resolve().parents[3]
+DATA_EXTRACTED = REPO_ROOT / "data" / "extracted"
 BATCH_SIZE = 500
 
-_MERGE_BY_NAME_NORM = """
-UNWIND $rows AS row
-CALL apoc.merge.node([row.type], {name_norm: row.name_norm}, row, row) YIELD node
-RETURN count(node) AS cnt
-"""
+ENTITY_LABELS: dict[EntityType, str] = {
+    EntityType.MATERIAL: "Material",
+    EntityType.PROCESS: "Process",
+    EntityType.EQUIPMENT: "Equipment",
+    EntityType.PROPERTY: "Property",
+    EntityType.EXPERIMENT: "Experiment",
+    EntityType.EXPERT: "Expert",
+    EntityType.ORGANIZATION: "Organization",
+    EntityType.FACILITY: "Facility",
+}
 
-_MERGE_CHUNK_BY_ID = """
-UNWIND $rows AS row
-CALL apoc.merge.node(['Chunk'], {id: row.id}, row, row) YIELD node
-RETURN count(node) AS cnt
-"""
+VALID_LABELS = frozenset(ENTITY_LABELS.values())
+VALID_REL_TYPES = frozenset(r.value for r in RelationType)
 
-_MERGE_RELATION = """
+NUMERIC_REL_TYPES = {RelationType.HAS_PROPERTY, RelationType.OPERATES_AT_CONDITION}
+
+_ENTITY_CYPHER: dict[str, str] = {
+    label: f"""
 UNWIND $rows AS row
-MATCH (src {id: row.source_id})
-MATCH (dst {id: row.target_id})
-CALL apoc.merge.relationship(
-  src,
-  row.type,
-  {id: row.id},
-  row,
-  dst
-) YIELD rel
+MERGE (n:{label} {{name_norm: row.name_norm}})
+ON CREATE SET
+    n.id = randomUUID(),
+    n.name = row.name,
+    n.aliases = row.aliases,
+    n.geography = row.geography,
+    n.confidence = row.confidence,
+    n.source_doc = row.source_doc,
+    n.source_chunk = row.source_chunk
+ON MATCH SET
+    n.aliases = apoc.coll.toSet(coalesce(n.aliases, []) + row.aliases),
+    n.confidence = CASE
+        WHEN row.confidence > coalesce(n.confidence, 0) THEN row.confidence
+        ELSE n.confidence
+    END
+RETURN count(n) AS cnt
+"""
+    for label in ENTITY_LABELS.values()
+}
+
+_MERGE_ENTITY_REL = """
+UNWIND $rows AS row
+CALL apoc.merge.node([row.src_label], {name_norm: row.src_norm}, {}, {}) YIELD node AS src
+CALL apoc.merge.node([row.dst_label], {name_norm: row.dst_norm}, {}, {}) YIELD node AS dst
+CALL apoc.merge.relationship(src, row.rel_type, {}, row.props, dst) YIELD rel
 RETURN count(rel) AS cnt
 """
 
+_MERGE_ENTITY_TO_PUB = """
+UNWIND $rows AS row
+CALL apoc.merge.node([row.src_label], {name_norm: row.src_norm}, {}, {}) YIELD node AS src
+MATCH (dst:Publication {doc_id: row.doc_id})
+CALL apoc.merge.relationship(src, row.rel_type, {}, row.props, dst) YIELD rel
+RETURN count(rel) AS cnt
+"""
 
-def _entity_row(entity: Entity) -> dict[str, Any]:
-    """Сериализовать Entity для Neo4j UNWIND."""
-    row = entity.model_dump(mode="json")
-    row["type"] = entity.type.value
-    return row
+_MERGE_PUB_TO_ENTITY = """
+UNWIND $rows AS row
+MATCH (src:Publication {doc_id: row.doc_id})
+CALL apoc.merge.node([row.dst_label], {name_norm: row.dst_norm}, {}, {}) YIELD node AS dst
+CALL apoc.merge.relationship(src, row.rel_type, {}, row.props, dst) YIELD rel
+RETURN count(rel) AS cnt
+"""
 
-
-def _relation_row(relation: Relation) -> dict[str, Any]:
-    """Сериализовать Relation для Neo4j UNWIND."""
-    row = relation.model_dump(mode="json")
-    row["type"] = relation.type.value
-    verification = row.pop("verification", {})
-    for key, val in verification.items():
-        row[f"verification_{key}"] = val
-    row["source_doc"] = verification.get("source_doc")
-    row["confidence"] = verification.get("confidence")
-    row["geography"] = verification.get("geography")
-    row["year"] = verification.get("year")
-    return row
-
-
-def load_jsonl(path: Path, driver: Driver) -> tuple[int, int]:
-    """
-    Загрузить GraphExtractionBundle из JSONL в Neo4j.
-
-    Args:
-        path: Путь к data/extracted/*.jsonl
-        driver: Neo4j driver.
-
-    Returns:
-        Кортеж (число сущностей, число связей).
-
-    Raises:
-        NotImplementedError: Полная загрузка — владелец Senior 1.
-    """
-    logger.info("load_jsonl called for %s", path)
-    if not path.exists():
-        logger.warning("File not found: %s", path)
-        return 0, 0
-    raise NotImplementedError(
-        "load_jsonl: implement UNWIND batch upsert for entities and relations"
-    )
+_DESCRIBED_IN_CYPHER = """
+UNWIND $rows AS row
+CALL apoc.merge.node([row.label], {name_norm: row.name_norm}, {}, {}) YIELD node AS n
+MATCH (p:Publication {doc_id: row.doc_id})
+MERGE (n)-[r:described_in]->(p)
+SET r.source_chunk = row.source_chunk
+RETURN count(r) AS cnt
+"""
 
 
-def batch_upsert_entities(driver: Driver, entities: list[Entity]) -> int:
-    """
-    Батч-вставка/обновление сущностей через UNWIND.
+@dataclass
+class EntityRow:
+    type: EntityType
+    name: str
+    name_norm: str
+    aliases: list[str]
+    geography: str
+    confidence: float
+    source_doc: str
+    source_chunk: str
+    tmp_ids: list[str] = field(default_factory=list)
 
-    Chunk мержится по id (нет uniqueness на name_norm); остальные — по name_norm.
 
-    Args:
-        driver: Neo4j driver.
-        entities: Список сущностей (до BATCH_SIZE).
+def read_extraction_records(path: Path) -> list[ChunkExtractionRecord]:
+    records: list[ChunkExtractionRecord] = []
+    with path.open(encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                records.append(ChunkExtractionRecord.model_validate_json(line))
+    return records
 
-    Returns:
-        Число обработанных записей.
-    """
-    if not entities:
-        return 0
 
-    chunks = [_entity_row(e) for e in entities if e.type == EntityType.CHUNK]
-    others = [_entity_row(e) for e in entities if e.type != EntityType.CHUNK]
+def _aggregate_entities(records: list[ChunkExtractionRecord]) -> dict[tuple[EntityType, str], EntityRow]:
+    grouped: dict[tuple[EntityType, str], EntityRow] = {}
+    for record in records:
+        for ent in record.result.entities:
+            if ent.type not in ENTITY_LABELS:
+                continue
+            key = (ent.type, ent.name_norm)
+            if key not in grouped:
+                grouped[key] = EntityRow(
+                    type=ent.type,
+                    name=ent.name,
+                    name_norm=ent.name_norm,
+                    aliases=list(ent.aliases),
+                    geography=ent.geography,
+                    confidence=ent.confidence,
+                    source_doc=record.doc_id,
+                    source_chunk=record.chunk_id,
+                    tmp_ids=[ent.tmp_id],
+                )
+            else:
+                row = grouped[key]
+                row.aliases = list(set(row.aliases + ent.aliases))
+                if ent.confidence > row.confidence:
+                    row.confidence = ent.confidence
+                if ent.tmp_id not in row.tmp_ids:
+                    row.tmp_ids.append(ent.tmp_id)
+    return grouped
+
+
+def _entity_to_dict(row: EntityRow) -> dict[str, Any]:
+    return {
+        "name": row.name,
+        "name_norm": row.name_norm,
+        "aliases": row.aliases,
+        "geography": row.geography,
+        "confidence": row.confidence,
+        "source_doc": row.source_doc,
+        "source_chunk": row.source_chunk,
+    }
+
+
+def _build_tmp_id_map(records: list[ChunkExtractionRecord]) -> dict[str, tuple[str, str]]:
+    mapping: dict[str, tuple[str, str]] = {}
+    for record in records:
+        for ent in record.result.entities:
+            if ent.type in ENTITY_LABELS:
+                mapping[ent.tmp_id] = (ENTITY_LABELS[ent.type], ent.name_norm)
+    return mapping
+
+
+def _relation_props(
+    rel: ExtractedRelation,
+    doc_id: str,
+    source_chunk: str,
+) -> dict[str, Any]:
+    props: dict[str, Any] = {
+        "source_doc": doc_id,
+        "source_chunk": source_chunk,
+        "confidence": rel.confidence,
+    }
+    if rel.type in NUMERIC_REL_TYPES and rel.numeric is not None:
+        n = rel.numeric
+        props["parameter"] = n.parameter
+        props["operator"] = n.operator.value if hasattr(n.operator, "value") else n.operator
+        props["value"] = n.value
+        props["value_min"] = n.value_min
+        props["value_max"] = n.value_max
+        props["unit"] = n.unit
+    for k, v in rel.attrs.items():
+        props[k] = v
+    return props
+
+
+def _resolve_ref(
+    ref: str,
+    tmp_map: dict[str, tuple[str, str]],
+) -> tuple[str, str] | None:
+    if ref == "DOC":
+        return None
+    if ref not in tmp_map:
+        return None
+    label, name_norm = tmp_map[ref]
+    if label not in VALID_LABELS:
+        return None
+    return label, name_norm
+
+
+def phase1_entities(driver: Driver, grouped: dict[tuple[EntityType, str], EntityRow]) -> int:
+    by_label: dict[str, list[dict[str, Any]]] = {lbl: [] for lbl in ENTITY_LABELS.values()}
+    for row in grouped.values():
+        by_label[ENTITY_LABELS[row.type]].append(_entity_to_dict(row))
+
     total = 0
-
     with driver.session() as session:
-        if others:
-            result = session.run(_MERGE_BY_NAME_NORM, rows=others)
-            record = result.single()
-            total += record["cnt"] if record else 0
-        if chunks:
-            result = session.run(_MERGE_CHUNK_BY_ID, rows=chunks)
+        for label, rows in by_label.items():
+            if not rows:
+                continue
+            cypher = _ENTITY_CYPHER[label]
+            for i in range(0, len(rows), BATCH_SIZE):
+                batch = rows[i : i + BATCH_SIZE]
+                result = session.run(cypher, rows=batch)
+                record = result.single()
+                total += record["cnt"] if record else 0
+    return total
+
+
+def phase2_relations(
+    driver: Driver,
+    records: list[ChunkExtractionRecord],
+    doc_id: str,
+    tmp_map: dict[str, tuple[str, str]],
+) -> int:
+    entity_rels: list[dict[str, Any]] = []
+    entity_to_pub: list[dict[str, Any]] = []
+    pub_to_entity: list[dict[str, Any]] = []
+    described_in_rows: list[dict[str, Any]] = []
+    seen_described: set[tuple[str, str, str]] = set()
+
+    for record in records:
+        for ent in record.result.entities:
+            if ent.type not in ENTITY_LABELS:
+                continue
+            label = ENTITY_LABELS[ent.type]
+            key = (label, ent.name_norm, record.doc_id)
+            if key not in seen_described:
+                seen_described.add(key)
+                described_in_rows.append(
+                    {
+                        "label": label,
+                        "name_norm": ent.name_norm,
+                        "doc_id": record.doc_id,
+                        "source_chunk": record.chunk_id,
+                    }
+                )
+
+        for rel in record.result.relations:
+            if rel.type.value not in VALID_REL_TYPES:
+                logger.warning("Unknown relation type %s", rel.type)
+                continue
+
+            props = _relation_props(rel, doc_id, record.chunk_id)
+            src_is_doc = rel.source == "DOC"
+            dst_is_doc = rel.target == "DOC"
+
+            if src_is_doc and dst_is_doc:
+                logger.warning("Skipping relation with both ends DOC: %s", rel.type.value)
+                continue
+
+            if src_is_doc:
+                dst = _resolve_ref(rel.target, tmp_map)
+                if dst is None:
+                    logger.warning(
+                        "Skipping broken relation %s: target=%s in %s",
+                        rel.type.value,
+                        rel.target,
+                        record.chunk_id,
+                    )
+                    continue
+                pub_to_entity.append(
+                    {
+                        "doc_id": doc_id,
+                        "dst_label": dst[0],
+                        "dst_norm": dst[1],
+                        "rel_type": rel.type.value,
+                        "props": props,
+                    }
+                )
+                continue
+
+            if dst_is_doc:
+                src = _resolve_ref(rel.source, tmp_map)
+                if src is None:
+                    logger.warning(
+                        "Skipping broken relation %s: source=%s in %s",
+                        rel.type.value,
+                        rel.source,
+                        record.chunk_id,
+                    )
+                    continue
+                entity_to_pub.append(
+                    {
+                        "src_label": src[0],
+                        "src_norm": src[1],
+                        "doc_id": doc_id,
+                        "rel_type": rel.type.value,
+                        "props": props,
+                    }
+                )
+                continue
+
+            src = _resolve_ref(rel.source, tmp_map)
+            dst = _resolve_ref(rel.target, tmp_map)
+            if src is None or dst is None:
+                logger.warning(
+                    "Skipping broken relation %s: source=%s target=%s in %s",
+                    rel.type.value,
+                    rel.source,
+                    rel.target,
+                    record.chunk_id,
+                )
+                continue
+
+            entity_rels.append(
+                {
+                    "src_label": src[0],
+                    "src_norm": src[1],
+                    "dst_label": dst[0],
+                    "dst_norm": dst[1],
+                    "rel_type": rel.type.value,
+                    "props": props,
+                }
+            )
+
+    total = 0
+    with driver.session() as session:
+        for rows, cypher in (
+            (entity_rels, _MERGE_ENTITY_REL),
+            (entity_to_pub, _MERGE_ENTITY_TO_PUB),
+            (pub_to_entity, _MERGE_PUB_TO_ENTITY),
+        ):
+            for i in range(0, len(rows), BATCH_SIZE):
+                batch = rows[i : i + BATCH_SIZE]
+                result = session.run(cypher, rows=batch)
+                record = result.single()
+                total += record["cnt"] if record else 0
+
+        for i in range(0, len(described_in_rows), BATCH_SIZE):
+            batch = described_in_rows[i : i + BATCH_SIZE]
+            result = session.run(_DESCRIBED_IN_CYPHER, rows=batch)
             record = result.single()
             total += record["cnt"] if record else 0
 
     return total
 
 
-def batch_upsert_relations(driver: Driver, relations: list[Relation]) -> int:
-    """
-    Батч-вставка связей через UNWIND.
+def load_document(path: Path, driver: Driver) -> tuple[int, int]:
+    records = read_extraction_records(path)
+    if not records:
+        return 0, 0
 
-    Пишет verification, numeric_constraints, date_from/date_to/amount (owns/operates).
+    doc_id = records[0].doc_id
+    grouped = _aggregate_entities(records)
+    tmp_map = _build_tmp_id_map(records)
 
-    Args:
-        driver: Neo4j driver.
-        relations: Список связей (до BATCH_SIZE).
-
-    Returns:
-        Число обработанных записей.
-
-    Raises:
-        NotImplementedError: Реализация merge рёбер — владелец Senior 1.
-    """
-    logger.info("batch_upsert_relations called, count=%d", len(relations))
-    raise NotImplementedError(
-        "batch_upsert_relations: implement UNWIND MERGE for typed relationships"
-    )
+    n_entities = phase1_entities(driver, grouped)
+    n_relations = phase2_relations(driver, records, doc_id, tmp_map)
+    logger.info("Loaded %s: entities=%d relations=%d", path.name, n_entities, n_relations)
+    return n_entities, n_relations
 
 
-def read_extraction_jsonl(path: Path) -> list[GraphExtractionBundle]:
-    """Прочитать JSONL с GraphExtractionBundle."""
-    results: list[GraphExtractionBundle] = []
-    with path.open(encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            data: dict[str, Any] = json.loads(line)
-            results.append(GraphExtractionBundle.model_validate(data))
-    return results
+def load_jsonl(path: Path, driver: Driver) -> tuple[int, int]:
+    return load_document(path, driver)
 
 
-def sync_extracted_from_s3(local_dir: Path) -> int:
-    """Скачать extracted/ из S3 в локальную директорию."""
-    from app.storage import get_storage
+def _extracted_files(extracted_dir: Path, pattern: str | None, single_file: Path | None) -> list[Path]:
+    if single_file is not None:
+        return [single_file]
+    files = sorted(extracted_dir.glob("*.jsonl"))
+    files = [f for f in files if not f.name.startswith("_")]
+    if pattern:
+        files = [f for f in files if fnmatch.fnmatch(f.stem, pattern)]
+    return files
 
-    storage = get_storage()
-    if not storage.available:
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Load extraction JSONL into Neo4j graph")
+    parser.add_argument("--extracted-dir", type=Path, default=DATA_EXTRACTED)
+    parser.add_argument("--file", type=Path, default=None, help="Single JSONL file to load")
+    parser.add_argument("--docs", default=None, help="Glob pattern for doc_id stem")
+    args = parser.parse_args(argv)
+
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+
+    file_arg = args.file
+    if file_arg is not None and not file_arg.is_absolute():
+        file_arg = REPO_ROOT / file_arg
+
+    paths = _extracted_files(args.extracted_dir, args.docs, file_arg)
+    if not paths:
+        logger.warning("No extraction files found")
         return 0
-    return storage.sync_prefix_down("extracted/", local_dir)
 
-
-def _default_extracted_dir() -> Path:
-    repo_root = Path(__file__).resolve().parents[3]
-    return repo_root / "data" / "extracted"
-
-
-def main() -> int:
-    import argparse
-
-    parser = argparse.ArgumentParser(description="Sync extracted data from S3")
-    parser.add_argument(
-        "--from-s3",
-        action="store_true",
-        help="Download extracted/ prefix from S3 to local directory",
-    )
-    parser.add_argument(
-        "--dir",
-        type=Path,
-        default=None,
-        help="Local extracted directory (default: repo data/extracted)",
-    )
-    args = parser.parse_args()
-
-    if not args.from_s3:
-        parser.error("--from-s3 is required")
-
-    local_dir = args.dir or _default_extracted_dir()
-    count = sync_extracted_from_s3(local_dir)
-    logger.info("Synced %d files to %s", count, local_dir)
+    driver = get_driver()
+    try:
+        total_e = 0
+        total_r = 0
+        for path in paths:
+            e, r = load_document(path, driver)
+            total_e += e
+            total_r += r
+        logger.info("Total: entities=%d relations=%d from %d files", total_e, total_r, len(paths))
+    finally:
+        close_driver()
     return 0
 
 
 if __name__ == "__main__":
-    import sys
-
     sys.exit(main())

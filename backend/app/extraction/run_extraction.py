@@ -30,6 +30,7 @@ DATA_PARSED = REPO_ROOT / "data" / "parsed"
 DATA_EXTRACTED = REPO_ROOT / "data" / "extracted"
 CORE_TERMS_PATH = REPO_ROOT / "data" / "reference" / "core_terms.json"
 EXTRACT_MANIFEST_NAME = "_manifest.json"
+SAMPLE_OUTPUT = DATA_EXTRACTED / "_sample.jsonl"
 
 # Калибровочный набор: 4 table + 3 frontmatter + 5 text
 SAMPLE_CHUNK_IDS = [
@@ -293,7 +294,7 @@ def print_sample_results(records: list[ChunkExtractionRecord]) -> None:
     print("\n" + "=" * 72)
 
 
-async def run_sample(parsed_dir: Path, canonical_terms: list[str]) -> int:
+async def run_sample(parsed_dir: Path, canonical_terms: list[str], *, write: bool = False) -> int:
     chunks = build_sample_chunks(parsed_dir)
     if len(chunks) != 12:
         logger.error("Expected 12 sample chunks, got %d", len(chunks))
@@ -318,6 +319,10 @@ async def run_sample(parsed_dir: Path, canonical_terms: list[str]) -> int:
         records.append(make_record(chunk, result, model=model, retries=retries, usage=usage))
 
     print_sample_results(records)
+    if write:
+        DATA_EXTRACTED.mkdir(parents=True, exist_ok=True)
+        write_records_atomic(SAMPLE_OUTPUT, records)
+        logger.info("Wrote %d sample records to %s", len(records), SAMPLE_OUTPUT)
     return 0
 
 
@@ -470,6 +475,11 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Calibration mode: exactly 12 chunks, print to stdout",
     )
+    parser.add_argument(
+        "--write",
+        action="store_true",
+        help="With --sample: write results to data/extracted/_sample.jsonl",
+    )
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
@@ -487,7 +497,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     if args.sample:
-        return asyncio.run(run_sample(args.parsed_dir, canonical_terms))
+        return asyncio.run(run_sample(args.parsed_dir, canonical_terms, write=args.write))
     return asyncio.run(run_extraction(args))
 
 
