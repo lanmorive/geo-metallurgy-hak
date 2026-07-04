@@ -11,12 +11,14 @@ from app.graph.init_db import split_cypher_statements
 from app.graph.loader import (
     _aggregate_entities,
     _build_tmp_id_map,
+    _should_load_entity,
     load_document,
     read_extraction_records,
 )
 from app.graph.quality import find_duplicate_pairs
 from app.graph.stop_entities import is_suspicious_name_norm
 from app.retrieval.embedder import _text_hash
+from app.schemas.ontology import ChunkExtractionRecord, EntityType, ExtractionResult, ExtractedEntity
 
 FIXTURE = Path(__file__).parent / "fixtures" / "sample_matte.jsonl"
 
@@ -48,10 +50,79 @@ def test_read_fixture_matte() -> None:
 
 def test_aggregate_entities_dedup() -> None:
     records = read_extraction_records(FIXTURE)
-    grouped = _aggregate_entities(records)
+    stop_set = frozenset()
+    grouped = _aggregate_entities(records, stop_set, min_conf=0.5)
     assert len(grouped) == 2
-    tmp_map = _build_tmp_id_map(records)
+    tmp_map = _build_tmp_id_map(records, stop_set, min_conf=0.5)
     assert tmp_map["e1"] == ("Material", "штейн мдп")
+
+
+def test_should_load_entity_stop_and_low_confidence() -> None:
+    stop_set = frozenset({"процесс"})
+    stop_ent = ExtractedEntity(
+        tmp_id="x",
+        type=EntityType.PROCESS,
+        name="Процесс",
+        name_norm="процесс",
+        confidence=0.9,
+    )
+    low_conf_material = ExtractedEntity(
+        tmp_id="y",
+        type=EntityType.MATERIAL,
+        name="X",
+        name_norm="материал x",
+        confidence=0.3,
+    )
+    low_conf_expert = ExtractedEntity(
+        tmp_id="z",
+        type=EntityType.EXPERT,
+        name="Expert",
+        name_norm="эксперт",
+        confidence=0.3,
+    )
+    assert not _should_load_entity(stop_ent, stop_set, 0.5)
+    assert not _should_load_entity(low_conf_material, stop_set, 0.5)
+    assert _should_load_entity(low_conf_expert, stop_set, 0.5)
+
+
+def test_aggregate_entities_filters_stop_and_low_confidence() -> None:
+    record = ChunkExtractionRecord(
+        chunk_id="c1",
+        doc_id="doc_test",
+        source_doc="doc_test",
+        source_chunk="c1",
+        result=ExtractionResult(
+            entities=[
+                ExtractedEntity(
+                    tmp_id="e1",
+                    type=EntityType.PROCESS,
+                    name="Процесс",
+                    name_norm="процесс",
+                    confidence=0.9,
+                ),
+                ExtractedEntity(
+                    tmp_id="e2",
+                    type=EntityType.MATERIAL,
+                    name="Low",
+                    name_norm="низкая уверенность",
+                    confidence=0.2,
+                ),
+                ExtractedEntity(
+                    tmp_id="e3",
+                    type=EntityType.MATERIAL,
+                    name="Ok",
+                    name_norm="нормальный материал",
+                    confidence=0.8,
+                ),
+            ],
+            relations=[],
+        ),
+        model="test",
+    )
+    stop_set = frozenset({"процесс"})
+    grouped = _aggregate_entities([record], stop_set, min_conf=0.5)
+    assert len(grouped) == 1
+    assert ("Material", "нормальный материал") in grouped
 
 
 def test_is_suspicious_name_norm() -> None:
@@ -75,6 +146,30 @@ def test_find_duplicate_pairs() -> None:
     assert pairs
     assert pairs[0].label == "Material"
     assert pairs[0].score > 90
+
+
+def test_read_slim_extracted_format(tmp_path: Path) -> None:
+    path = tmp_path / "doc_test.jsonl"
+    path.write_text(
+        '{"chunk_id": "doc_test_00001", "doc_id": "doc_test", "retries": 0, '
+        '"usage": {"prompt_tokens": 10, "completion_tokens": 5}, '
+        '"result": {"entities": [], "relations": []}}\n',
+        encoding="utf-8",
+    )
+    records = read_extraction_records(path)
+    assert len(records) == 1
+    assert records[0].source_doc == "doc_test"
+    assert records[0].source_chunk == "doc_test_00001"
+    assert records[0].model == "unknown"
+
+
+def test_read_skips_null_result(tmp_path: Path) -> None:
+    path = tmp_path / "doc_test.jsonl"
+    path.write_text(
+        '{"chunk_id": "c1", "doc_id": "doc_test", "result": null}\n',
+        encoding="utf-8",
+    )
+    assert read_extraction_records(path) == []
 
 
 def test_text_hash_stable() -> None:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import fnmatch
+import json
 import logging
 import sys
 from dataclasses import dataclass, field
@@ -12,10 +13,13 @@ from typing import Any
 
 from neo4j import Driver
 
+from app.config import settings
 from app.graph.driver import close_driver, get_driver
+from app.graph.stop_entities import load_stop_entities
 from app.schemas.ontology import (
     ChunkExtractionRecord,
     EntityType,
+    ExtractedEntity,
     ExtractedRelation,
     RelationType,
 )
@@ -36,6 +40,8 @@ ENTITY_LABELS: dict[EntityType, str] = {
     EntityType.ORGANIZATION: "Organization",
     EntityType.FACILITY: "Facility",
 }
+
+LOW_CONFIDENCE_EXEMPT_TYPES = frozenset({EntityType.EXPERT, EntityType.ORGANIZATION})
 
 VALID_LABELS = frozenset(ENTITY_LABELS.values())
 VALID_REL_TYPES = frozenset(r.value for r in RelationType)
@@ -112,21 +118,93 @@ class EntityRow:
     tmp_ids: list[str] = field(default_factory=list)
 
 
+@dataclass
+class LoadStats:
+    entities: int = 0
+    relations: int = 0
+    skipped_stop_entities: int = 0
+    skipped_low_confidence_entities: int = 0
+    skipped_low_confidence_relates_to: int = 0
+
+    def __iadd__(self, other: LoadStats) -> LoadStats:
+        self.entities += other.entities
+        self.relations += other.relations
+        self.skipped_stop_entities += other.skipped_stop_entities
+        self.skipped_low_confidence_entities += other.skipped_low_confidence_entities
+        self.skipped_low_confidence_relates_to += other.skipped_low_confidence_relates_to
+        return self
+
+
 def read_extraction_records(path: Path) -> list[ChunkExtractionRecord]:
     records: list[ChunkExtractionRecord] = []
     with path.open(encoding="utf-8") as f:
         for line in f:
             line = line.strip()
-            if line:
-                records.append(ChunkExtractionRecord.model_validate_json(line))
+            if not line:
+                continue
+            data = json.loads(line)
+            result = data.get("result")
+            if not result:
+                continue
+            data.setdefault("source_doc", data["doc_id"])
+            data.setdefault("source_chunk", data["chunk_id"])
+            data.setdefault("model", "unknown")
+            usage = data.pop("usage", None) or {}
+            data.setdefault("prompt_tokens", usage.get("prompt_tokens"))
+            data.setdefault("completion_tokens", usage.get("completion_tokens"))
+            for extra in ("kind", "section"):
+                data.pop(extra, None)
+            records.append(ChunkExtractionRecord.model_validate(data))
     return records
 
 
-def _aggregate_entities(records: list[ChunkExtractionRecord]) -> dict[tuple[EntityType, str], EntityRow]:
+def _should_load_entity(
+    ent: ExtractedEntity,
+    stop_set: frozenset[str],
+    min_conf: float,
+) -> bool:
+    if ent.name_norm.strip().lower() in stop_set:
+        return False
+    if ent.confidence < min_conf and ent.type not in LOW_CONFIDENCE_EXEMPT_TYPES:
+        return False
+    return True
+
+
+def _count_skipped_entities(
+    records: list[ChunkExtractionRecord],
+    stop_set: frozenset[str],
+    min_conf: float,
+) -> tuple[int, int]:
+    skipped_stop = 0
+    skipped_low_conf = 0
+    seen: set[tuple[EntityType, str]] = set()
+    for record in records:
+        for ent in record.result.entities:
+            if ent.type not in ENTITY_LABELS:
+                continue
+            key = (ent.type, ent.name_norm)
+            if key in seen:
+                continue
+            seen.add(key)
+            norm = ent.name_norm.strip().lower()
+            if norm in stop_set:
+                skipped_stop += 1
+            elif ent.confidence < min_conf and ent.type not in LOW_CONFIDENCE_EXEMPT_TYPES:
+                skipped_low_conf += 1
+    return skipped_stop, skipped_low_conf
+
+
+def _aggregate_entities(
+    records: list[ChunkExtractionRecord],
+    stop_set: frozenset[str],
+    min_conf: float,
+) -> dict[tuple[EntityType, str], EntityRow]:
     grouped: dict[tuple[EntityType, str], EntityRow] = {}
     for record in records:
         for ent in record.result.entities:
             if ent.type not in ENTITY_LABELS:
+                continue
+            if not _should_load_entity(ent, stop_set, min_conf):
                 continue
             key = (ent.type, ent.name_norm)
             if key not in grouped:
@@ -163,11 +241,15 @@ def _entity_to_dict(row: EntityRow) -> dict[str, Any]:
     }
 
 
-def _build_tmp_id_map(records: list[ChunkExtractionRecord]) -> dict[str, tuple[str, str]]:
+def _build_tmp_id_map(
+    records: list[ChunkExtractionRecord],
+    stop_set: frozenset[str],
+    min_conf: float,
+) -> dict[str, tuple[str, str]]:
     mapping: dict[str, tuple[str, str]] = {}
     for record in records:
         for ent in record.result.entities:
-            if ent.type in ENTITY_LABELS:
+            if ent.type in ENTITY_LABELS and _should_load_entity(ent, stop_set, min_conf):
                 mapping[ent.tmp_id] = (ENTITY_LABELS[ent.type], ent.name_norm)
     return mapping
 
@@ -233,16 +315,21 @@ def phase2_relations(
     records: list[ChunkExtractionRecord],
     doc_id: str,
     tmp_map: dict[str, tuple[str, str]],
-) -> int:
+    stop_set: frozenset[str],
+    min_conf: float,
+) -> tuple[int, int]:
     entity_rels: list[dict[str, Any]] = []
     entity_to_pub: list[dict[str, Any]] = []
     pub_to_entity: list[dict[str, Any]] = []
     described_in_rows: list[dict[str, Any]] = []
     seen_described: set[tuple[str, str, str]] = set()
+    skipped_low_conf_relates_to = 0
 
     for record in records:
         for ent in record.result.entities:
             if ent.type not in ENTITY_LABELS:
+                continue
+            if not _should_load_entity(ent, stop_set, min_conf):
                 continue
             label = ENTITY_LABELS[ent.type]
             key = (label, ent.name_norm, record.doc_id)
@@ -260,6 +347,10 @@ def phase2_relations(
         for rel in record.result.relations:
             if rel.type.value not in VALID_REL_TYPES:
                 logger.warning("Unknown relation type %s", rel.type)
+                continue
+
+            if rel.type == RelationType.RELATES_TO and rel.confidence < min_conf:
+                skipped_low_conf_relates_to += 1
                 continue
 
             props = _relation_props(rel, doc_id, record.chunk_id)
@@ -354,25 +445,53 @@ def phase2_relations(
             record = result.single()
             total += record["cnt"] if record else 0
 
-    return total
+    return total, skipped_low_conf_relates_to
 
 
-def load_document(path: Path, driver: Driver) -> tuple[int, int]:
+def load_document(
+    path: Path,
+    driver: Driver,
+    stop_set: frozenset[str] | None = None,
+    min_conf: float | None = None,
+) -> LoadStats:
     records = read_extraction_records(path)
+    stats = LoadStats()
     if not records:
-        return 0, 0
+        return stats
+
+    if stop_set is None:
+        stop_set = load_stop_entities()
+    if min_conf is None:
+        min_conf = settings.load_min_confidence
 
     doc_id = records[0].doc_id
-    grouped = _aggregate_entities(records)
-    tmp_map = _build_tmp_id_map(records)
+    skipped_stop, skipped_low_conf = _count_skipped_entities(records, stop_set, min_conf)
+    stats.skipped_stop_entities = skipped_stop
+    stats.skipped_low_confidence_entities = skipped_low_conf
 
-    n_entities = phase1_entities(driver, grouped)
-    n_relations = phase2_relations(driver, records, doc_id, tmp_map)
-    logger.info("Loaded %s: entities=%d relations=%d", path.name, n_entities, n_relations)
-    return n_entities, n_relations
+    grouped = _aggregate_entities(records, stop_set, min_conf)
+    tmp_map = _build_tmp_id_map(records, stop_set, min_conf)
+
+    stats.entities = phase1_entities(driver, grouped)
+    n_relations, skipped_rel = phase2_relations(
+        driver, records, doc_id, tmp_map, stop_set, min_conf
+    )
+    stats.relations = n_relations
+    stats.skipped_low_confidence_relates_to = skipped_rel
+
+    logger.info(
+        "Loaded %s: entities=%d relations=%d skipped_stop=%d skipped_low_conf_entity=%d skipped_low_conf_relates_to=%d",
+        path.name,
+        stats.entities,
+        stats.relations,
+        stats.skipped_stop_entities,
+        stats.skipped_low_confidence_entities,
+        stats.skipped_low_confidence_relates_to,
+    )
+    return stats
 
 
-def load_jsonl(path: Path, driver: Driver) -> tuple[int, int]:
+def load_jsonl(path: Path, driver: Driver) -> LoadStats:
     return load_document(path, driver)
 
 
@@ -404,15 +523,23 @@ def main(argv: list[str] | None = None) -> int:
         logger.warning("No extraction files found")
         return 0
 
+    stop_set = load_stop_entities()
+    min_conf = settings.load_min_confidence
+
     driver = get_driver()
+    total = LoadStats()
     try:
-        total_e = 0
-        total_r = 0
         for path in paths:
-            e, r = load_document(path, driver)
-            total_e += e
-            total_r += r
-        logger.info("Total: entities=%d relations=%d from %d files", total_e, total_r, len(paths))
+            total += load_document(path, driver, stop_set=stop_set, min_conf=min_conf)
+        logger.info(
+            "Total: entities=%d relations=%d from %d files skipped_stop=%d skipped_low_conf_entity=%d skipped_low_conf_relates_to=%d",
+            total.entities,
+            total.relations,
+            len(paths),
+            total.skipped_stop_entities,
+            total.skipped_low_confidence_entities,
+            total.skipped_low_confidence_relates_to,
+        )
     finally:
         close_driver()
     return 0

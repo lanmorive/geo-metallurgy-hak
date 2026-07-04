@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     s3_secret_access_key: str = ""
     feature_graph: bool = False
     feature_synthesis: bool = False
+    load_min_confidence: float = 0.5
     synthesis_model: str = ""
     synthesis_base_url: str = ""
 
