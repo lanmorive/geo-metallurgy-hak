@@ -26,7 +26,12 @@ RETURN node.chunk_id AS chunk_id,
        p.doc_id AS doc_id,
        p.title AS title,
        node.page AS page,
-       node.section AS section
+       node.section AS section,
+       p.year AS year,
+       p.venue AS venue,
+       p.doc_type AS doc_type,
+       p.lang AS lang,
+       p.geography AS geography
 ORDER BY score DESC
 LIMIT $k
 """
@@ -36,6 +41,7 @@ def search(
     query: str,
     top_k: int = 10,
     filters: dict[str, Any] | None = None,
+    close_after: bool = False,
 ) -> list[dict[str, Any]]:
     filters = filters or {}
     qvec = embed_query(query)
@@ -57,7 +63,8 @@ def search(
             result = session.run(_VECTOR_SEARCH, **params)
             return [dict(record) for record in result]
     finally:
-        close_driver()
+        if close_after:
+            close_driver()
 
 
 def _print_results(results: list[dict[str, Any]]) -> None:
@@ -91,7 +98,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.doc_type:
         filters["doc_type"] = args.doc_type
 
-    results = search(args.query, top_k=args.top_k, filters=filters)
+    results = search(args.query, top_k=args.top_k, filters=filters, close_after=True)
     print(f"Query: {args.query!r}  ({len(results)} results)")
     _print_results(results)
     return 0
