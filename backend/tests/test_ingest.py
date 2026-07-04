@@ -11,6 +11,7 @@ from app.ingest.authors import extract_author_hint, fix_file_metadata_author
 from app.ingest.chunker import _coalesce_blocks, blocks_to_chunks
 from app.ingest.noise import is_noise
 from app.ingest.parser import parse_file
+from app.ingest.source_meta import parse_source_key
 from app.ingest.types import Block
 from app.schemas.ontology import ParsedChunk
 
@@ -39,6 +40,24 @@ def test_extract_author_hint_surname_initials() -> None:
 
 def test_extract_author_hint_english() -> None:
   assert extract_author_hint("Nicole_Roocke_report.pdf") == "Nicole Roocke"
+
+
+def test_parse_source_key_journal() -> None:
+  meta = parse_source_key(
+    "raw/Задача 2. Научный клубок/Источники информации/Журналы/Горная промышленность/2024/article.pdf"
+  )
+  assert meta.category == "Журналы"
+  assert meta.venue == "Горная промышленность"
+  assert meta.year == 2024
+  assert meta.doc_type == "journal_issue"
+
+
+def test_parse_source_key_doklad() -> None:
+  meta = parse_source_key(
+    "raw/Задача 2. Научный клубок/Источники информации/Доклады/Доклад_Румянцев А.Е.pdf"
+  )
+  assert meta.category == "Доклады"
+  assert meta.doc_type == "presentation"
 
 
 def test_fix_pdf_metadata_author_garbage() -> None:
