@@ -1,4 +1,4 @@
-.PHONY: up down init-db embed-only ingest extract extract-core extract-sample load-chunks load-graph load-graph-sample graph-report dedup dedup-export dedup-offline dedup-apply test seed-demo s3-push s3-pull s3-push-embeddings s3-pull-embeddings s3-push-extracted s3-pull-extracted llm-up llm-smoke t2c-sample synth-sample ref-queries
+.PHONY: up down init-db embed-only ingest extract extract-core extract-sample load-chunks load-graph load-graph-sample graph-wipe graph-reset graph-report dedup dedup-export dedup-offline dedup-apply test seed-demo s3-push s3-pull s3-push-embeddings s3-pull-embeddings s3-push-extracted s3-pull-extracted llm-up llm-smoke t2c-sample synth-sample ref-queries mark-reference-chunks
 
 DRY_RUN ?= 1
 INPUT ?= data/dedup_entities.json
@@ -50,6 +50,17 @@ load-graph:
 
 load-graph-sample:
 	PYTHONPATH=backend backend/.venv/bin/python -m app.graph.loader --file data/extracted/_sample.jsonl
+
+graph-wipe:
+	@$(run_with_host_neo4j) \
+	PYTHONPATH=backend backend/.venv/bin/python -m app.graph.wipe
+
+graph-reset:
+	@$(run_with_host_neo4j) \
+	PYTHONPATH=backend backend/.venv/bin/python -m app.graph.wipe && \
+	PYTHONPATH=backend backend/.venv/bin/python -m app.graph.init_db && \
+	PYTHONPATH=backend backend/.venv/bin/python -m app.graph.load_chunks && \
+	PYTHONPATH=backend backend/.venv/bin/python -m app.graph.loader
 
 graph-report:
 	@$(run_with_host_neo4j) \
@@ -106,3 +117,7 @@ ref-queries:
 	@set -a && [ -f .env ] && . ./.env; set +a; \
 	case "$$NEO4J_URI" in bolt://neo4j:7687) export NEO4J_URI=bolt://localhost:7687 ;; esac; \
 	PYTHONPATH=backend backend/.venv/bin/python backend/scripts/run_reference_queries.py
+
+mark-reference-chunks:
+	@$(run_with_host_neo4j) \
+	PYTHONPATH=backend backend/.venv/bin/python backend/scripts/mark_reference_chunks.py
