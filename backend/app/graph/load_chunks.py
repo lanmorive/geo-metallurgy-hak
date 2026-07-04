@@ -113,7 +113,7 @@ def load_document(
     if not chunks:
         return 0, 0, 0
 
-    embeddings = load_or_compute_embeddings(doc_id, chunks)
+    embeddings, _, _ = load_or_compute_embeddings(doc_id, chunks)
     driver = get_driver()
 
     loaded = 0

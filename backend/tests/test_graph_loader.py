@@ -142,8 +142,8 @@ def test_embedder_cache_roundtrip(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     fake_vec = [0.1] * 1024
     monkeypatch.setattr(emb, "embed_texts", lambda texts: [fake_vec for _ in texts])
 
-    result1 = emb.load_or_compute_embeddings("doc_test", [chunk])
-    assert len(result1["doc_test_00001"]) == 1024
+    result1_vectors, _, _ = emb.load_or_compute_embeddings("doc_test", [chunk])
+    assert len(result1_vectors["doc_test_00001"]) == 1024
 
     # second call should hit cache
     call_count = {"n": 0}
@@ -154,9 +154,11 @@ def test_embedder_cache_roundtrip(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
         return original(texts)
 
     monkeypatch.setattr(emb, "embed_texts", counting_embed)
-    result2 = emb.load_or_compute_embeddings("doc_test", [chunk])
+    result2_vectors, computed, cached = emb.load_or_compute_embeddings("doc_test", [chunk])
     assert call_count["n"] == 0
-    np.testing.assert_allclose(result2["doc_test_00001"], result1["doc_test_00001"], rtol=1e-5)
+    assert computed == 0
+    assert cached == 1
+    np.testing.assert_allclose(result2_vectors["doc_test_00001"], result1_vectors["doc_test_00001"], rtol=1e-5)
 
     manifest = json.loads((tmp_path / "doc_test.manifest.json").read_text())
     assert manifest["chunk_ids"] == ["doc_test_00001"]

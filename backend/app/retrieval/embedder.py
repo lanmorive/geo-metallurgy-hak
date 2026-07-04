@@ -128,35 +128,38 @@ def _save_cache_atomic(
 def load_or_compute_embeddings(
     doc_id: str,
     chunks: list[ParsedChunk],
-) -> dict[str, list[float]]:
+    *,
+    force: bool = False,
+) -> tuple[dict[str, list[float]], int, int]:
     """
-    Return chunk_id -> embedding, using disk cache when text hash matches.
+    Return (chunk_id -> embedding, computed_count, cached_count).
 
-    Recomputes only new or changed chunks; atomically rewrites .npy + manifest.
+    Uses disk cache when text hash matches. Recomputes only new/changed chunks
+    unless force=True.
     """
     if not chunks:
-        return {}
+        return {}, 0, 0
 
     chunk_ids = [c.chunk_id for c in chunks]
     text_hashes = [_text_hash(c.text) for c in chunks]
     hash_by_id = dict(zip(chunk_ids, text_hashes, strict=True))
 
     cached_vectors: dict[str, list[float]] = {}
-    manifest = _load_manifest(doc_id)
-    npy_path = _npy_path(doc_id)
-
-    if (
-        manifest is not None
-        and manifest.get("model") == settings.embedding_model
-        and npy_path.exists()
-        and manifest.get("chunk_ids")
-        and len(manifest["chunk_ids"]) == len(manifest.get("text_hashes", []))
-    ):
-        arr = np.load(npy_path)
-        for i, cid in enumerate(manifest["chunk_ids"]):
-            th = manifest["text_hashes"][i]
-            if hash_by_id.get(cid) == th and i < len(arr):
-                cached_vectors[cid] = arr[i].tolist()
+    if not force:
+        manifest = _load_manifest(doc_id)
+        npy_path = _npy_path(doc_id)
+        if (
+            manifest is not None
+            and manifest.get("model") == settings.embedding_model
+            and npy_path.exists()
+            and manifest.get("chunk_ids")
+            and len(manifest["chunk_ids"]) == len(manifest.get("text_hashes", []))
+        ):
+            arr = np.load(npy_path)
+            for i, cid in enumerate(manifest["chunk_ids"]):
+                th = manifest["text_hashes"][i]
+                if hash_by_id.get(cid) == th and i < len(arr):
+                    cached_vectors[cid] = arr[i].tolist()
 
     to_compute = [c for c in chunks if c.chunk_id not in cached_vectors]
     if to_compute:
@@ -171,4 +174,6 @@ def load_or_compute_embeddings(
         dtype=np.float32,
     )
     _save_cache_atomic(doc_id, ordered_ids, [hash_by_id[cid] for cid in ordered_ids], matrix)
-    return {cid: cached_vectors[cid] for cid in ordered_ids}
+    computed = len(to_compute)
+    cached = len(chunks) - computed
+    return {cid: cached_vectors[cid] for cid in ordered_ids}, computed, cached
