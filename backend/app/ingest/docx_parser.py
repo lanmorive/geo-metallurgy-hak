@@ -119,7 +119,7 @@ def parse_docx(path: Path) -> ParseResult:
   props = document.core_properties
   created = props.created.isoformat() if props.created else None
   doc_meta = DocMeta(
-    author=props.author or None,
+    file_metadata_author=props.author or None,
     created=created,
     pages=None,
   )

@@ -15,6 +15,9 @@ logger = logging.getLogger(__name__)
 
 CHUNK_SIZE = 1200
 CHUNK_OVERLAP = 150
+COALESCE_MAX = 900
+COALESCE_MIN_STANDALONE = 40
+SLIDE_AVG_BLOCK_LEN = 120
 
 
 def _detect_lang(text: str) -> str:
@@ -29,6 +32,185 @@ def _detect_lang(text: str) -> str:
   return "ru"
 
 
+def _is_text_block(block: Block) -> bool:
+  return block.type in ("paragraph", "heading")
+
+
+def _slide_pages(blocks: list[Block]) -> set[int]:
+  by_page: dict[int, list[Block]] = {}
+  for block in blocks:
+    if _is_text_block(block) and block.page is not None:
+      by_page.setdefault(block.page, []).append(block)
+
+  slides: set[int] = set()
+  for page, page_blocks in by_page.items():
+    avg_len = sum(len(b.text) for b in page_blocks) / len(page_blocks)
+    if avg_len < SLIDE_AVG_BLOCK_LEN:
+      slides.add(page)
+  return slides
+
+
+def _merge_slide_page(blocks: list[Block]) -> Block:
+  merged = "\n".join(b.text for b in blocks if b.text.strip())
+  first_line = next(
+    (line.strip() for line in merged.split("\n") if line.strip()),
+    merged[:80],
+  )
+  return Block(
+    type="paragraph",
+    text=merged,
+    page=blocks[0].page,
+    section=first_line,
+    level=blocks[0].level,
+  )
+
+
+def _coalesce_section_group(blocks: list[Block]) -> list[Block]:
+  if not blocks:
+    return []
+
+  merged_blocks: list[Block] = []
+  current = blocks[0]
+  current_text = current.text
+
+  for block in blocks[1:]:
+    candidate = f"{current_text}\n{block.text}"
+    if len(candidate) < COALESCE_MAX:
+      current_text = candidate
+      continue
+    merged_blocks.append(
+      Block(
+        type="paragraph",
+        text=current_text,
+        page=current.page,
+        section=current.section,
+        level=current.level,
+      )
+    )
+    current = block
+    current_text = block.text
+
+  merged_blocks.append(
+    Block(
+      type="paragraph",
+      text=current_text,
+      page=current.page,
+      section=current.section,
+      level=current.level,
+    )
+  )
+  return merged_blocks
+
+
+def _coalesce_text_run(blocks: list[Block]) -> list[Block]:
+  if not blocks:
+    return []
+
+  groups: list[list[Block]] = []
+  current_group = [blocks[0]]
+  for block in blocks[1:]:
+    if block.section == current_group[-1].section:
+      current_group.append(block)
+    else:
+      groups.append(current_group)
+      current_group = [block]
+  groups.append(current_group)
+
+  result: list[Block] = []
+  for group in groups:
+    result.extend(_coalesce_section_group(group))
+  return result
+
+
+def _attach_orphans(blocks: list[Block]) -> list[Block]:
+  if not blocks:
+    return blocks
+
+  result: list[Block] = []
+  pending_short: Block | None = None
+
+  for block in blocks:
+    if block.type == "table":
+      if pending_short is not None:
+        result.append(pending_short)
+        pending_short = None
+      result.append(block)
+      continue
+
+    text_block = block
+    if pending_short is not None:
+      text_block = Block(
+        type="paragraph",
+        text=f"{pending_short.text}\n{block.text}",
+        page=block.page,
+        section=block.section,
+        level=block.level,
+      )
+      pending_short = None
+
+    if len(text_block.text.strip()) < COALESCE_MIN_STANDALONE:
+      if result and result[-1].type != "table":
+        prev = result[-1]
+        result[-1] = Block(
+          type="paragraph",
+          text=f"{prev.text}\n{text_block.text}",
+          page=prev.page,
+          section=prev.section,
+          level=prev.level,
+        )
+      else:
+        pending_short = text_block
+      continue
+
+    result.append(text_block)
+
+  if pending_short is not None:
+    if result and result[-1].type != "table":
+      prev = result[-1]
+      result[-1] = Block(
+        type="paragraph",
+        text=f"{prev.text}\n{pending_short.text}",
+        page=prev.page,
+        section=prev.section,
+        level=prev.level,
+      )
+    else:
+      result.append(pending_short)
+
+  return result
+
+
+def _coalesce_blocks(blocks: list[Block]) -> list[Block]:
+  slide_page_nums = _slide_pages(blocks)
+  coalesced: list[Block] = []
+  index = 0
+
+  while index < len(blocks):
+    block = blocks[index]
+    if block.type == "table" or not _is_text_block(block):
+      coalesced.append(block)
+      index += 1
+      continue
+
+    run = [block]
+    next_index = index + 1
+    while (
+      next_index < len(blocks)
+      and _is_text_block(blocks[next_index])
+      and blocks[next_index].page == block.page
+    ):
+      run.append(blocks[next_index])
+      next_index += 1
+
+    if block.page is not None and block.page in slide_page_nums:
+      coalesced.append(_merge_slide_page(run))
+    else:
+      coalesced.extend(_coalesce_text_run(run))
+    index = next_index
+
+  return _attach_orphans(coalesced)
+
+
 def _chunk_paragraphs(
   indexed_blocks: list[tuple[int, Block]],
   *,
@@ -36,6 +218,7 @@ def _chunk_paragraphs(
   section: str,
   file_name: str,
   source_key: str,
+  author_hint: str | None,
 ) -> list[ParsedChunk]:
   if not indexed_blocks:
     return []
@@ -93,6 +276,7 @@ def _chunk_paragraphs(
           lang=_detect_lang(chunk_text),
           file_name=file_name,
           source_key=source_key,
+          author_hint=author_hint,
         )
       )
 
@@ -109,9 +293,11 @@ def blocks_to_chunks(
   doc_id: str,
   file_name: str,
   source_key: str,
+  author_hint: str | None = None,
 ) -> list[ParsedChunk]:
   """Разбить блоки на ParsedChunk (таблицы — атомарные чанки)."""
   chunkable = [b for b in blocks if b.section != "references"]
+  chunkable = _coalesce_blocks(chunkable)
   chunks: list[ParsedChunk] = []
 
   prev_paragraph: str | None = None
@@ -130,6 +316,7 @@ def blocks_to_chunks(
           lang=_detect_lang(block.text),
           file_name=file_name,
           source_key=source_key,
+          author_hint=author_hint,
         )
       )
       prev_paragraph = None
@@ -151,6 +338,7 @@ def blocks_to_chunks(
         section=section,
         file_name=file_name,
         source_key=source_key,
+        author_hint=author_hint,
       )
     )
 
