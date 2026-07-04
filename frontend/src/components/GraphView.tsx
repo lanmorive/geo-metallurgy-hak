@@ -6,6 +6,16 @@ import type { EntityType, GraphEdge, GraphNode } from '../api/client'
 import { GRAPH_HIDDEN_ENTITY_TYPES } from '../api/client'
 import { useOpenDocument } from '../hooks/useOpenDocument'
 import { colors } from '../theme/tokens'
+import {
+  confidenceDotClass,
+  confidenceLevel,
+  formatAliases,
+  formatGeography,
+  formatPublicationMeta,
+  getConfidenceFromProps,
+  getSourceDoc,
+  resolvePublicationTitle,
+} from '../utils/graphNodeDisplay'
 
 interface GraphViewProps {
   nodes: GraphNode[]
@@ -32,6 +42,16 @@ interface ForceLink {
   source: string | ForceNode
   target: string | ForceNode
   type: string
+}
+
+function ConfidenceBadge({ value }: { value: number }) {
+  const level = confidenceLevel(value)
+  return (
+    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-badge bg-neutral-100 text-[10px] text-neutral-600">
+      <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${confidenceDotClass(level)}`} />
+      достоверность {value.toFixed(2)}
+    </span>
+  )
 }
 
 function PublicationDocumentButton({ docId }: { docId: string }) {
@@ -106,11 +126,6 @@ function displayName(node: Pick<GraphNode, 'name' | 'label' | 'id'>): string {
 function truncateLabel(label: string, max = 16): string {
   if (label.length <= max) return label
   return `${label.slice(0, max - 1)}…`
-}
-
-function getConfidenceFromProps(properties: Record<string, unknown>): number | null {
-  const conf = properties.confidence
-  return typeof conf === 'number' ? conf : null
 }
 
 function getNodeColor(type: EntityType): string {
@@ -318,12 +333,64 @@ export default function GraphView({
     }
   }, [])
 
-  const getConfidence = (node: GraphNode | ForceNode): number | null =>
-    getConfidenceFromProps(node.properties)
+  const renderNodePopover = (node: GraphNode) => {
+    const confidence = getConfidenceFromProps(node.properties)
+    const aliases = formatAliases(node.properties)
+    const geography = formatGeography(node.properties.geography)
+    const isPublication = node.type === 'Publication'
+    const publicationMeta = isPublication ? formatPublicationMeta(node.properties) : null
+    const sourceDoc = !isPublication ? getSourceDoc(node.properties) : null
+    const sourceTitle = sourceDoc ? resolvePublicationTitle(nodes, sourceDoc) : null
 
-  const getSourceDoc = (node: GraphNode): string | null => {
-    const doc = node.properties.source_doc
-    return typeof doc === 'string' ? doc : null
+    return (
+      <>
+        <p className="text-base font-semibold text-neutral-900 leading-tight mb-2">
+          {node.name}
+        </p>
+        <div className="flex flex-wrap items-center gap-1.5 mb-2">
+          <span
+            className={`inline-block px-1.5 py-0.5 rounded-badge text-[10px] text-white ${ENTITY_BG_CLASS[node.type]}`}
+          >
+            {ENTITY_LABELS[node.type]}
+          </span>
+          {confidence != null && <ConfidenceBadge value={confidence} />}
+        </div>
+        {aliases && (
+          <p className="text-[10px] text-neutral-600 mb-1">
+            также: {aliases}
+          </p>
+        )}
+        {geography && (
+          <p className="text-[10px] text-neutral-600 mb-1">{geography}</p>
+        )}
+        {isPublication ? (
+          <>
+            {publicationMeta && (
+              <p className="text-[10px] text-neutral-600 mb-1">{publicationMeta}</p>
+            )}
+            <PublicationDocumentButton key={node.id} docId={node.id} />
+          </>
+        ) : (
+          <>
+            {sourceTitle && (
+              <p className="text-[10px] text-neutral-600 mb-1">
+                Источник: {sourceTitle}
+              </p>
+            )}
+            <button
+              type="button"
+              onClick={() => {
+                onSendQuery(`Показать связи сущности «${node.name}»`)
+                setSelectedNode(null)
+              }}
+              className="mt-2 w-full text-[10px] py-1.5 rounded-control border border-surface-border hover:bg-neutral-50"
+            >
+              Показать связи
+            </button>
+          </>
+        )}
+      </>
+    )
   }
 
   return (
@@ -386,7 +453,9 @@ export default function GraphView({
           />
         )}
 
-        {hoveredNode && !selectedNode && (
+        {hoveredNode && !selectedNode && (() => {
+          const hoverConfidence = getConfidenceFromProps(hoveredNode.properties)
+          return (
           <div
             className="absolute z-20 pointer-events-none max-w-[220px] rounded-card border border-surface-border bg-surface-card px-2.5 py-2 shadow-sm"
             style={{
@@ -395,63 +464,20 @@ export default function GraphView({
             }}
           >
             <p className="text-xs font-medium text-neutral-900 leading-snug">{hoveredNode.name}</p>
-            <p className="text-[10px] text-neutral-500 mt-0.5">{ENTITY_LABELS[hoveredNode.type]}</p>
-            <p className="text-[10px] text-neutral-600 mt-0.5">
-              <span className="text-neutral-400">confidence: </span>
-              <span className="font-mono">
-                {getConfidence(hoveredNode)?.toFixed(2) ?? '—'}
-              </span>
-            </p>
+            <div className="flex flex-wrap items-center gap-1.5 mt-1">
+              <span className="text-[10px] text-neutral-500">{ENTITY_LABELS[hoveredNode.type]}</span>
+              {hoverConfidence != null && <ConfidenceBadge value={hoverConfidence} />}
+            </div>
           </div>
-        )}
+          )
+        })()}
 
         {selectedNode && (
           <div
-            className="absolute z-10 w-52 rounded-card border border-surface-border bg-surface-card p-3 shadow-none"
+            className="absolute z-10 w-60 max-w-[240px] rounded-card border border-surface-border bg-surface-card p-3 shadow-none"
             style={{ left: popoverPos.x, top: popoverPos.y }}
           >
-            <p className="text-sm font-medium text-neutral-900 leading-tight mb-2">
-              {selectedNode.name}
-            </p>
-            <span
-              className={`inline-block px-1.5 py-0.5 rounded-badge text-[10px] text-white mb-2 ${ENTITY_BG_CLASS[selectedNode.type]}`}
-            >
-              {ENTITY_LABELS[selectedNode.type]}
-            </span>
-            {Object.entries(selectedNode.properties)
-              .filter(([k]) => !['confidence', 'source_doc'].includes(k))
-              .slice(0, 3)
-              .map(([k, v]) => (
-                <p key={k} className="text-[10px] text-neutral-600">
-                  <span className="text-neutral-400">{k}: </span>
-                  <span className="font-mono">{String(v)}</span>
-                </p>
-              ))}
-            {getConfidence(selectedNode) != null && (
-              <p className="text-[10px] text-neutral-600 mt-1">
-                <span className="text-neutral-400">confidence: </span>
-                <span className="font-mono">{getConfidence(selectedNode)?.toFixed(2)}</span>
-              </p>
-            )}
-            {getSourceDoc(selectedNode) && (
-              <p className="text-[10px] text-neutral-600">
-                <span className="text-neutral-400">source: </span>
-                <span className="font-mono">{getSourceDoc(selectedNode)}</span>
-              </p>
-            )}
-            {selectedNode.type === 'Publication' && (
-              <PublicationDocumentButton key={selectedNode.id} docId={selectedNode.id} />
-            )}
-            <button
-              type="button"
-              onClick={() => {
-                onSendQuery(`Показать связи сущности «${selectedNode.name}»`)
-                setSelectedNode(null)
-              }}
-              className="mt-2 w-full text-[10px] py-1.5 rounded-control border border-surface-border hover:bg-neutral-50"
-            >
-              Показать связи
-            </button>
+            {renderNodePopover(selectedNode)}
           </div>
         )}
       </div>
