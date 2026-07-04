@@ -19,10 +19,11 @@ class Block:
 
 @dataclass
 class DocMeta:
-    author: str | None = None
+    file_metadata_author: str | None = None
     created: str | None = None
     pages: int | None = None
     ocr_pages: int = 0
+    ocr_low_yield_pages: int = 0
 
 
 @dataclass

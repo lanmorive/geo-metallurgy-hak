@@ -197,6 +197,7 @@ class ParsedChunk(BaseModel):
     lang: Literal["ru", "en"]
     file_name: str
     source_key: str
+    author_hint: str | None = None
 
 
 class ParsedDocumentMeta(BaseModel):
@@ -206,13 +207,18 @@ class ParsedDocumentMeta(BaseModel):
     file_name: str
     source_key: str
     file_hash: str
-    author: str | None = None
+    file_metadata_author: str | None = None
+    author_hint: str | None = None
     created: str | None = None
     pages: int | None = None
     chunks: int
     tables: int
     ocr_pages: int
+    ocr_low_yield_pages: int = 0
     noise_blocks_dropped: int
+    text_chars: int = 0
+    text_chars_per_page: float | None = None
+    low_yield: bool = False
     status: Literal["ok", "error", "skipped_too_large"]
     error: str | None = None
     processing_seconds: float | None = None
