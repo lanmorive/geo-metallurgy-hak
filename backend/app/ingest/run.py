@@ -76,7 +76,9 @@ def _manifest_entry_for_key(manifest: dict, source_key: str) -> dict | None:
   return None
 
 
-def _should_skip_by_key(manifest: dict, source_key: str, etag: str) -> bool:
+def _should_skip_by_key(manifest: dict, source_key: str, etag: str, *, force: bool) -> bool:
+  if force:
+    return False
   entry = _manifest_entry_for_key(manifest, source_key)
   if not entry:
     return False
@@ -193,6 +195,10 @@ def process_local_file(
       author_hint=author_hint,
     )
     tables = sum(1 for c in chunks if c.kind == "table")
+    pages = result.doc_meta.pages
+    text_chars = sum(len(c.text) for c in chunks)
+    text_chars_per_page = text_chars / pages if pages else None
+    low_yield = text_chars_per_page is not None and text_chars_per_page < 150
 
     jsonl_path = parsed_dir / f"{doc_id}.jsonl"
     refs_path = parsed_dir / f"{doc_id}.references.json"
@@ -209,11 +215,15 @@ def process_local_file(
       file_metadata_author=result.doc_meta.file_metadata_author,
       author_hint=author_hint,
       created=result.doc_meta.created,
-      pages=result.doc_meta.pages,
+      pages=pages,
       chunks=len(chunks),
       tables=tables,
       ocr_pages=result.doc_meta.ocr_pages,
+      ocr_low_yield_pages=result.doc_meta.ocr_low_yield_pages,
       noise_blocks_dropped=noise_dropped,
+      text_chars=text_chars,
+      text_chars_per_page=text_chars_per_page,
+      low_yield=low_yield,
       status="ok",
       processing_seconds=elapsed,
     )
@@ -269,7 +279,12 @@ def _upload_outputs(storage, parsed_dir: Path, doc_id: str, has_references: bool
       storage.upload_file(refs, f"parsed/{doc_id}.references.json")
 
 
-def _collect_jobs(corpus_prefix: str, manifest: dict) -> tuple[list[FileJob], list[ProcessOutput]]:
+def _collect_jobs(
+  corpus_prefix: str,
+  manifest: dict,
+  *,
+  force: bool,
+) -> tuple[list[FileJob], list[ProcessOutput]]:
   storage = get_storage()
   skipped_outputs: list[ProcessOutput] = []
   jobs: list[FileJob] = []
@@ -280,7 +295,7 @@ def _collect_jobs(corpus_prefix: str, manifest: dict) -> tuple[list[FileJob], li
       if suffix not in SUPPORTED_SUFFIXES:
         continue
       file_name = Path(obj.key).name
-      if _should_skip_by_key(manifest, obj.key, obj.etag):
+      if _should_skip_by_key(manifest, obj.key, obj.etag, force=force):
         entry = _manifest_entry_for_key(manifest, obj.key)
         if entry:
           skipped_outputs.append(_entry_to_output(entry, obj.key, file_name, obj.etag))
@@ -332,7 +347,7 @@ def _collect_jobs(corpus_prefix: str, manifest: dict) -> tuple[list[FileJob], li
         rel = path.relative_to(REPO_ROOT / "data")
         source_key = f"raw/{rel.as_posix()}"
         file_hash = file_sha256(path)
-        if _should_skip_by_key(manifest, source_key, file_hash):
+        if _should_skip_by_key(manifest, source_key, file_hash, force=force):
           entry = _manifest_entry_for_key(manifest, source_key)
           if entry:
             skipped_outputs.append(
@@ -377,12 +392,22 @@ def _print_summary(outputs: list[ProcessOutput], total_seconds: float) -> None:
     f"{'Document':<40} {'Chunks':>7} {'Tables':>7} {'OCR':>5} {'Noise':>7} {'Status':>10}"
   )
   print("-" * 80)
+  low_yield_docs: list[str] = []
   for out in outputs:
     m = out.meta
     print(
       f"{out.file_name:<40} {m.chunks:>7} {m.tables:>7} {m.ocr_pages:>5} "
       f"{m.noise_blocks_dropped:>7} {m.status:>10}"
     )
+    if m.status == "ok" and m.pages and m.pages > 0 and m.chunks / m.pages > 6:
+      logger.warning(
+        "High chunk density: %s (%d chunks / %d pages)",
+        out.file_name,
+        m.chunks,
+        m.pages,
+      )
+    if m.low_yield:
+      low_yield_docs.append(out.file_name)
 
   ok_count = sum(1 for o in outputs if o.meta.status == "ok")
   print("-" * 80)
@@ -390,6 +415,11 @@ def _print_summary(outputs: list[ProcessOutput], total_seconds: float) -> None:
   print(f"Total time: {total_seconds:.1f}s")
   if total_seconds > 0 and outputs:
     print(f"Throughput: {len(outputs) / (total_seconds / 60):.1f} files/min")
+
+  if low_yield_docs:
+    print("\nLow-yield documents:")
+    for name in low_yield_docs:
+      print(f"  {name}")
 
   slowest = sorted(outputs, key=lambda o: o.processing_seconds, reverse=True)[:5]
   if slowest:
@@ -408,6 +438,11 @@ def main(argv: list[str] | None = None) -> int:
     default=DATA_PARSED,
     help="Output directory for parsed JSONL",
   )
+  parser.add_argument(
+    "--force",
+    action="store_true",
+    help="Reprocess all documents ignoring manifest cache",
+  )
   args = parser.parse_args(argv)
 
   logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
@@ -418,7 +453,7 @@ def main(argv: list[str] | None = None) -> int:
   manifest = load_manifest(manifest_path)
 
   storage = get_storage()
-  jobs, already_done = _collect_jobs(args.corpus_prefix, manifest)
+  jobs, already_done = _collect_jobs(args.corpus_prefix, manifest, force=args.force)
 
   all_outputs: list[ProcessOutput] = list(already_done)
   started = time.perf_counter()

@@ -13,7 +13,7 @@ seed-demo:
 	PYTHONPATH=backend backend/.venv/bin/python scripts/seed_demo.py
 
 ingest:
-	PYTHONPATH=backend backend/.venv/bin/python -m app.ingest.run
+	PYTHONPATH=backend backend/.venv/bin/python -m app.ingest.run $(if $(FORCE),--force,)
 
 extract:
 	PYTHONPATH=backend backend/.venv/bin/python scripts/run_pipeline.py --step extract
