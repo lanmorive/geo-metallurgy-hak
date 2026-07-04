@@ -176,6 +176,26 @@ class S3Storage:
         logger.info("S3 sync_prefix_down: prefix=%s local_dir=%s files=%d", prefix, local_dir, count)
         return count
 
+    def sync_prefix_up(self, prefix: str, local_dir: Path) -> int:
+        if not self._available or not local_dir.is_dir():
+            return 0
+        count = 0
+        prefix_norm = prefix if prefix.endswith("/") else f"{prefix}/"
+        for local_path in local_dir.rglob("*"):
+            if not local_path.is_file():
+                continue
+            relative = local_path.relative_to(local_dir).as_posix()
+            self.upload_file(local_path, f"{prefix_norm}{relative}")
+            count += 1
+        logger.info("S3 sync_prefix_up: prefix=%s local_dir=%s files=%d", prefix_norm, local_dir, count)
+        return count
+
+    def sync_embeddings_down(self, local_dir: Path) -> int:
+        return self.sync_prefix_down("embeddings/", local_dir)
+
+    def sync_embeddings_up(self, local_dir: Path) -> int:
+        return self.sync_prefix_up("embeddings", local_dir)
+
     def push_data_dir(self, data_root: Path) -> int:
         if not self._available:
             return 0

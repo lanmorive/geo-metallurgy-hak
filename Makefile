@@ -1,4 +1,4 @@
-.PHONY: up down init-db embed-only ingest extract extract-core extract-sample load-chunks load-graph load-graph-sample test seed-demo s3-push s3-pull llm-up llm-smoke
+.PHONY: up down init-db embed-only ingest extract extract-core extract-sample load-chunks load-graph load-graph-sample test seed-demo s3-push s3-pull s3-push-embeddings s3-pull-embeddings llm-up llm-smoke
 
 up:
 	docker compose up -d --build
@@ -44,6 +44,12 @@ s3-push:
 
 s3-pull:
 	PYTHONPATH=backend backend/.venv/bin/python scripts/run_pipeline.py --pull-s3
+
+s3-push-embeddings:
+	PYTHONPATH=backend backend/.venv/bin/python scripts/run_pipeline.py --push-embeddings
+
+s3-pull-embeddings:
+	PYTHONPATH=backend backend/.venv/bin/python scripts/run_pipeline.py --pull-embeddings
 
 llm-up:
 	docker compose --profile local-llm up -d vllm

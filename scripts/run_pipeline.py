@@ -13,6 +13,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 DATA_RAW = REPO_ROOT / "data" / "raw"
 DATA_PARSED = REPO_ROOT / "data" / "parsed"
 DATA_EXTRACTED = REPO_ROOT / "data" / "extracted"
+DATA_EMBEDDINGS = REPO_ROOT / "data" / "embeddings"
 DATA_ROOT = REPO_ROOT / "data"
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
@@ -73,6 +74,30 @@ def step_pull_s3() -> int:
     return 0
 
 
+def step_push_embeddings() -> int:
+    from app.storage import get_storage
+
+    storage = get_storage()
+    if not storage.available:
+        logger.warning("S3 not available — nothing to push")
+        return 1
+    count = storage.sync_embeddings_up(DATA_EMBEDDINGS)
+    logger.info("Pushed %d embedding files to S3", count)
+    return 0 if count > 0 else 0
+
+
+def step_pull_embeddings() -> int:
+    from app.storage import get_storage
+
+    storage = get_storage()
+    if not storage.available:
+        logger.warning("S3 not available — nothing to pull")
+        return 1
+    count = storage.sync_embeddings_down(DATA_EMBEDDINGS)
+    logger.info("Pulled %d embedding files from S3", count)
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Научный клубок pipeline")
     parser.add_argument(
@@ -91,6 +116,16 @@ def main() -> int:
         help="Download data/ from S3 and exit",
     )
     parser.add_argument(
+        "--push-embeddings",
+        action="store_true",
+        help="Upload data/embeddings/ to S3 and exit",
+    )
+    parser.add_argument(
+        "--pull-embeddings",
+        action="store_true",
+        help="Download embeddings/ from S3 to data/embeddings/ and exit",
+    )
+    parser.add_argument(
         "--from-s3",
         action="store_true",
         help="Before load step, sync extracted/ from S3 to local data/",
@@ -101,6 +136,10 @@ def main() -> int:
         return step_push_s3()
     if args.pull_s3:
         return step_pull_s3()
+    if args.push_embeddings:
+        return step_push_embeddings()
+    if args.pull_embeddings:
+        return step_pull_embeddings()
 
     steps = {
         "ingest": step_ingest,
