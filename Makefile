@@ -38,18 +38,22 @@ extract-sample:
 	PYTHONPATH=backend backend/.venv/bin/python -m app.extraction.run_extraction --sample --write
 
 init-db:
+	@$(run_with_host_neo4j) \
 	PYTHONPATH=backend backend/.venv/bin/python -m app.graph.init_db
 
 embed-only:
 	PYTHONPATH=backend backend/.venv/bin/python -m app.retrieval.embed_only
 
 load-chunks:
+	@$(run_with_host_neo4j) \
 	PYTHONPATH=backend backend/.venv/bin/python -m app.graph.load_chunks
 
 load-graph:
+	@$(run_with_host_neo4j) \
 	PYTHONPATH=backend backend/.venv/bin/python -m app.graph.loader
 
 load-graph-sample:
+	@$(run_with_host_neo4j) \
 	PYTHONPATH=backend backend/.venv/bin/python -m app.graph.loader --file data/extracted/_sample.jsonl
 
 graph-wipe:
@@ -59,8 +63,11 @@ graph-wipe:
 graph-reset:
 	@$(run_with_host_neo4j) \
 	PYTHONPATH=backend backend/.venv/bin/python -m app.graph.wipe && \
+	$(run_with_host_neo4j) \
 	PYTHONPATH=backend backend/.venv/bin/python -m app.graph.init_db && \
+	$(run_with_host_neo4j) \
 	PYTHONPATH=backend backend/.venv/bin/python -m app.graph.load_chunks && \
+	$(run_with_host_neo4j) \
 	PYTHONPATH=backend backend/.venv/bin/python -m app.graph.loader
 
 graph-report:
