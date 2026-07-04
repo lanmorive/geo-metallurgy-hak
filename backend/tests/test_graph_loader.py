@@ -219,7 +219,7 @@ def test_loader_idempotent_and_has_property_edge() -> None:
             r1 = session.run("MATCH ()-[r]->() RETURN count(r) AS c").single()["c"]
             edge = session.run(
                 """
-                MATCH ()-[r:has_property]->()
+                MATCH ()-[r:HAS_PROPERTY]->()
                 WHERE r.value = 31.2 AND r.unit = '% масс.'
                 RETURN count(r) AS c
                 """

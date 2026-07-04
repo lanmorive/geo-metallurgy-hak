@@ -81,7 +81,7 @@ def to_graph_edge(rel: Any) -> GraphEdge | None:
     target = to_graph_node(rel.end_node).id
     rel_type = rel.type
     try:
-        typed_rel = RelationType(rel_type)
+        typed_rel = RelationType(rel_type.lower())
     except ValueError:
         logger.debug("Skipping unsupported relation type %s", rel_type)
         return None

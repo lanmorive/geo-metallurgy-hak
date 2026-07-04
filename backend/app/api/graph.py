@@ -16,7 +16,7 @@ from app.schemas.api import GraphStatsResponse, GraphSubset, SubgraphResponse
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-SKIP_EXPANSION_REL_TYPES = {"part_of", "described_in"}
+SKIP_EXPANSION_REL_TYPES = {"part_of", "DESCRIBED_IN"}
 
 _STATS_CYPHER = """
 MATCH (n)
@@ -57,7 +57,7 @@ RETURN nodes, rels
 """
 
 _CHUNK_ENTITY_EXPANSION_CYPHER = """
-MATCH (c:Chunk)-[:part_of]->(p:Publication)<-[:described_in]-(e)
+MATCH (c:Chunk)-[:part_of]->(p:Publication)<-[:DESCRIBED_IN]-(e)
 WHERE c.chunk_id IN $chunk_ids
   AND any(l IN labels(e) WHERE l IN $entity_labels)
   AND coalesce(e.confidence, 0.0) >= $min_confidence
