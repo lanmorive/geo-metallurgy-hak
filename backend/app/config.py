@@ -25,8 +25,18 @@ class Settings(BaseSettings):
     s3_secret_access_key: str = ""
     feature_graph: bool = False
     feature_synthesis: bool = False
+    synthesis_model: str = ""
+    synthesis_base_url: str = ""
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    @property
+    def effective_synthesis_model(self) -> str:
+        return self.synthesis_model or self.llm_model
+
+    @property
+    def effective_synthesis_base_url(self) -> str:
+        return self.synthesis_base_url or self.llm_base_url
 
     @property
     def cors_origins(self) -> list[str]:

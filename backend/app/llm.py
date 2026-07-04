@@ -53,6 +53,25 @@ class LLMClient:
         except Exception as exc:
             raise RuntimeError(f"LLM недоступен по {self.base_url}") from exc
 
+    async def complete(
+        self,
+        system: str,
+        user: str,
+        max_tokens: int = 4000,
+        temperature: float = 0.2,
+        *,
+        model: str | None = None,
+    ) -> str:
+        """Chat completion (plain text/markdown) с transport-retry."""
+        return await self._complete_impl(
+            system,
+            user,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            model=model,
+            json_mode=False,
+        )
+
     async def complete_json(
         self,
         system: str,
@@ -63,11 +82,30 @@ class LLMClient:
         model: str | None = None,
     ) -> str:
         """Chat completion с опциональным guided JSON и transport-retry."""
+        return await self._complete_impl(
+            system,
+            user,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            model=model,
+            json_mode=True,
+        )
+
+    async def _complete_impl(
+        self,
+        system: str,
+        user: str,
+        *,
+        max_tokens: int,
+        temperature: float,
+        model: str | None,
+        json_mode: bool,
+    ) -> str:
         messages = [
             {"role": "system", "content": system},
             {"role": "user", "content": user},
         ]
-        use_guided = self.guided_json
+        use_guided = json_mode and self.guided_json
         delay = _BACKOFF_BASE
 
         while True:
@@ -126,6 +164,7 @@ def _is_response_format_unsupported(exc: APIStatusError) -> bool:
 
 
 _client: LLMClient | None = None
+_synthesis_client: LLMClient | None = None
 
 
 def get_llm_client() -> LLMClient:
@@ -140,3 +179,17 @@ def get_llm_client() -> LLMClient:
             guided_json=settings.llm_guided_json,
         )
     return _client
+
+
+def get_synthesis_client() -> LLMClient:
+    """LLMClient для synthesis с fallback на основные llm_* настройки."""
+    global _synthesis_client
+    if _synthesis_client is None:
+        _synthesis_client = LLMClient(
+            api_key=settings.llm_api_key,
+            base_url=settings.effective_synthesis_base_url,
+            model=settings.effective_synthesis_model,
+            timeout=float(settings.llm_timeout),
+            guided_json=False,
+        )
+    return _synthesis_client
