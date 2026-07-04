@@ -14,7 +14,7 @@ from typing import Any
 
 from app.config import settings
 from app.graph.driver import close_driver
-from app.retrieval import hybrid
+from app.retrieval import embedder, hybrid
 from app.retrieval.cypher_diagnostics import diagnose_empty_cypher
 from app.retrieval.hybrid import RetrievalStats
 from app.schemas.api import RetrievedContext
@@ -131,7 +131,10 @@ def _print_query_result(i: int, result: dict[str, Any]) -> None:
         print(f"cypher:\n{result['cypher']}")
     print(f"cypher_rows: {result['cypher_rows']}")
     print(f"vector_hits: {result['vector_hits']}")
-    print(f"vector_ms: {result['vector_ms']}  cypher_ms: {result['cypher_ms']}")
+    print(
+        f"vector_ms: {result['vector_ms']} (embed_ms: {result.get('embed_ms')} "
+        f"search_ms: {result.get('search_ms')})  cypher_ms: {result['cypher_ms']}"
+    )
     print("top_chunks:")
     for j, ch in enumerate(result.get("top_chunks") or [], 1):
         score = ch.get("score")
@@ -204,6 +207,8 @@ async def run_one(query: str, filters: dict[str, Any]) -> dict[str, Any]:
         "cypher_rows": stats.cypher_rows,
         "vector_hits": stats.vector_hits,
         "vector_ms": stats.vector_ms,
+        "embed_ms": stats.embed_ms,
+        "search_ms": stats.search_ms,
         "cypher_ms": stats.cypher_ms,
         "top_chunks": top,
         "graph_nodes": len(ctx.nodes) if ctx else 0,
@@ -217,6 +222,11 @@ async def run_one(query: str, filters: dict[str, Any]) -> dict[str, Any]:
 async def main() -> int:
     if not settings.feature_graph:
         logger.warning("FEATURE_GRAPH=false — graph leg disabled; results may be vector-only")
+
+    logger.info("Warming up embedding model...")
+    t_warmup = time.perf_counter()
+    await asyncio.to_thread(embedder.warmup)
+    logger.info("Embedding model ready in %d ms", int((time.perf_counter() - t_warmup) * 1000))
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     run_at = datetime.now(timezone.utc)

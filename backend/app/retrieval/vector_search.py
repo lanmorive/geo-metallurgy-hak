@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+import time
 from typing import Any
 
 from app.graph.driver import close_driver, get_driver
@@ -16,7 +17,8 @@ _VECTOR_SEARCH = """
 CALL db.index.vector.queryNodes('chunk_embedding', $overfetch, $qvec)
 YIELD node, score
 MATCH (node)-[:part_of]->(p:Publication)
-WHERE ($year_min IS NULL OR p.year >= $year_min)
+WHERE NOT coalesce(node.is_reference, false)
+  AND ($year_min IS NULL OR p.year >= $year_min)
   AND ($year_max IS NULL OR p.year <= $year_max)
   AND ($lang IS NULL OR p.lang = $lang)
   AND ($doc_type IS NULL OR p.doc_type = $doc_type)
@@ -37,19 +39,35 @@ LIMIT $k
 """
 
 
-def search(
-    query: str,
+def _dedup_chunks(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Схлопнуть чанки с одинаковым (doc_id, первые 120 символов text), оставив max score."""
+    best: dict[tuple[str, str], dict[str, Any]] = {}
+    order: list[tuple[str, str]] = []
+    for row in rows:
+        key = (str(row.get("doc_id") or ""), (row.get("text") or "")[:120])
+        current = best.get(key)
+        if current is None:
+            best[key] = row
+            order.append(key)
+        elif (row.get("score") or 0.0) > (current.get("score") or 0.0):
+            best[key] = row
+    return [best[key] for key in order]
+
+
+def search_by_vector(
+    qvec: list[float],
     top_k: int = 10,
     filters: dict[str, Any] | None = None,
     close_after: bool = False,
 ) -> list[dict[str, Any]]:
+    """Только Neo4j-поиск по готовому вектору (без эмбеддинга)."""
     filters = filters or {}
-    qvec = embed_query(query)
-    overfetch = top_k * 3
+    # k*4 у индекса: запас на отсев библиографии (is_reference) и схлопывание дублей
+    overfetch = top_k * 4
 
     params = {
         "qvec": qvec,
-        "k": top_k,
+        "k": overfetch,
         "overfetch": overfetch,
         "year_min": filters.get("year_min"),
         "year_max": filters.get("year_max"),
@@ -58,13 +76,35 @@ def search(
     }
 
     driver = get_driver()
+    t0 = time.perf_counter()
     try:
         with driver.session() as session:
             result = session.run(_VECTOR_SEARCH, **params)
-            return [dict(record) for record in result]
+            rows = [dict(record) for record in result]
     finally:
         if close_after:
             close_driver()
+    deduped = _dedup_chunks(rows)[:top_k]
+    logger.info(
+        "vector search: %d hits -> %d after dedup in %d ms",
+        len(rows),
+        len(deduped),
+        int((time.perf_counter() - t0) * 1000),
+    )
+    return deduped
+
+
+def search(
+    query: str,
+    top_k: int = 10,
+    filters: dict[str, Any] | None = None,
+    close_after: bool = False,
+) -> list[dict[str, Any]]:
+    """Эмбеддинг запроса + Neo4j-поиск (для CLI и не-async вызовов)."""
+    t0 = time.perf_counter()
+    qvec = embed_query(query)
+    logger.info("embed_query: %d ms", int((time.perf_counter() - t0) * 1000))
+    return search_by_vector(qvec, top_k, filters, close_after)
 
 
 def _print_results(results: list[dict[str, Any]]) -> None:

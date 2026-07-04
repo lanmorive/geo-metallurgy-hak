@@ -96,13 +96,19 @@ def _parse_plan(raw: str) -> CypherPlan:
     )
 
 
+MAX_ATTEMPTS = 2
+
+
 async def generate(query: str, filters: dict[str, Any] | None = None) -> CypherPlan:
     """Сгенерировать Cypher из естественного языка через LLM."""
     llm = get_llm_client()
     user = query + _format_filters(filters)
     last_reason = "не удалось сгенерировать валидный Cypher"
+    first_failure_reason: str | None = None
+    attempts_used = 0
 
-    for attempt in range(2):
+    for attempt in range(MAX_ATTEMPTS):
+        attempts_used = attempt + 1
         try:
             raw = await llm.complete_json(
                 TEXT2CYPHER_SYSTEM,
@@ -114,19 +120,32 @@ async def generate(query: str, filters: dict[str, Any] | None = None) -> CypherP
         except (json.JSONDecodeError, ValueError, KeyError) as exc:
             logger.warning("text2cypher JSON parse error: %s", exc)
             last_reason = f"невалидный JSON от LLM: {exc}"
+            if first_failure_reason is None:
+                first_failure_reason = last_reason
             if attempt == 0:
                 user = f"Ошибка валидации: {last_reason}\nИсходный запрос: {query}"
                 continue
+            logger.warning(
+                "text2cypher failed after %d attempts; first failure: %s",
+                attempts_used,
+                first_failure_reason,
+            )
             return CypherPlan(cypher=None, explanation=last_reason)
 
         if plan.cypher is None:
+            logger.info("text2cypher: no cypher chosen (attempt %d/%d)", attempts_used, MAX_ATTEMPTS)
             return plan
 
         normalized = normalize_cypher(plan.cypher)
         if normalized is not None:
+            logger.info("text2cypher ok attempt=%d/%d", attempts_used, MAX_ATTEMPTS)
+            if attempts_used >= 2 and first_failure_reason is not None:
+                logger.info("text2cypher first-attempt failure: %s", first_failure_reason)
             return CypherPlan(cypher=normalized, explanation=plan.explanation)
 
         last_reason = _validation_error(plan.cypher) or "не прошёл whitelist"
+        if first_failure_reason is None:
+            first_failure_reason = last_reason
         logger.warning("text2cypher validation failed (attempt %d): %s", attempt + 1, last_reason)
         if attempt == 0:
             user = (
@@ -135,6 +154,11 @@ async def generate(query: str, filters: dict[str, Any] | None = None) -> CypherP
                 f"Невалидный Cypher: {plan.cypher[:500]}"
             )
 
+    logger.warning(
+        "text2cypher failed after %d attempts; first failure: %s",
+        attempts_used,
+        first_failure_reason,
+    )
     return CypherPlan(cypher=None, explanation=last_reason)
 
 

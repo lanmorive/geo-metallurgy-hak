@@ -19,6 +19,7 @@ from app.graph.convert import (
 )
 from app.graph.driver import get_driver
 from app.retrieval import text2cypher, vector_search
+from app.retrieval.embedder import embed_query
 from app.schemas.api import GraphSubset, RetrievedContext
 
 logger = logging.getLogger(__name__)
@@ -34,6 +35,8 @@ class RetrievalStats:
     vector_hits: int = 0
     cypher_rows: int = 0
     vector_ms: int = 0
+    embed_ms: int = 0
+    search_ms: int = 0
     cypher_ms: int = 0
     cypher: str | None = None
     cypher_valid: bool = False
@@ -199,15 +202,23 @@ async def retrieve(
     vector_error: Exception | None = None
     graph_error: Exception | None = None
     vector_ms = 0
+    embed_ms = 0
+    search_ms = 0
     cypher_ms = 0
 
     async def _vector() -> list[dict[str, Any]]:
-        nonlocal vector_ms
+        nonlocal vector_ms, embed_ms, search_ms
+        loop = asyncio.get_running_loop()
         t0 = time.perf_counter()
-        result = await asyncio.to_thread(
-            vector_search.search, query, 20, filters
+        # embed_query — sync CPU-bound, уводим с event loop
+        qvec = await loop.run_in_executor(None, embed_query, query)
+        embed_ms = int((time.perf_counter() - t0) * 1000)
+        t1 = time.perf_counter()
+        result = await loop.run_in_executor(
+            None, vector_search.search_by_vector, qvec, 20, filters
         )
-        vector_ms = int((time.perf_counter() - t0) * 1000)
+        search_ms = int((time.perf_counter() - t1) * 1000)
+        vector_ms = embed_ms + search_ms
         return result
 
     async def _graph() -> list[dict[str, Any]]:
@@ -226,25 +237,32 @@ async def retrieve(
         cypher_ms = int((time.perf_counter() - t0) * 1000)
         return rows
 
-    vector_task = asyncio.create_task(_vector())
-    graph_task = asyncio.create_task(_graph())
+    vector_result, graph_result = await asyncio.gather(
+        _vector(), _graph(), return_exceptions=True
+    )
 
-    try:
-        vector_chunks = await vector_task
-    except Exception as exc:
-        vector_error = exc
-        logger.exception("vector search failed in hybrid retrieve")
+    if isinstance(vector_result, Exception):
+        vector_error = vector_result
+        logger.exception(
+            "vector search failed in hybrid retrieve", exc_info=vector_result
+        )
+    else:
+        vector_chunks = vector_result
 
-    try:
-        cypher_rows = await graph_task
-    except Exception as exc:
-        graph_error = exc
-        logger.exception("text2cypher failed in hybrid retrieve")
+    if isinstance(graph_result, Exception):
+        graph_error = graph_result
+        logger.exception(
+            "text2cypher failed in hybrid retrieve", exc_info=graph_result
+        )
+    else:
+        cypher_rows = graph_result
 
     if stats is not None:
         stats.vector_hits = len(vector_chunks) if vector_error is None else 0
         stats.cypher_rows = len(cypher_rows) if graph_error is None else 0
         stats.vector_ms = vector_ms
+        stats.embed_ms = embed_ms
+        stats.search_ms = search_ms
         stats.cypher_ms = cypher_ms
 
     vector_ok = vector_error is None and bool(vector_chunks)
@@ -288,11 +306,13 @@ async def retrieve(
         edges=graph_subset.edges,
     )
     logger.info(
-        "hybrid retrieve mode=%s vector_chunks=%d cypher_rows=%d vector_ms=%d cypher_ms=%d "
-        "chunks=%d facts=%d nodes=%d",
+        "hybrid retrieve mode=%s vector_chunks=%d cypher_rows=%d "
+        "embed_ms=%d search_ms=%d vector_ms=%d cypher_ms=%d chunks=%d facts=%d nodes=%d",
         mode,
         len(vector_chunks) if vector_error is None else 0,
         len(cypher_rows) if graph_error is None else 0,
+        embed_ms,
+        search_ms,
         vector_ms,
         cypher_ms,
         len(ctx.chunks),
