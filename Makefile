@@ -1,8 +1,9 @@
-.PHONY: up down init-db embed-only ingest extract extract-core extract-sample load-chunks load-graph load-graph-sample graph-wipe graph-reset graph-report dedup dedup-export dedup-offline dedup-apply test seed-demo s3-push s3-pull s3-push-embeddings s3-pull-embeddings s3-push-extracted s3-pull-extracted llm-up llm-smoke t2c-sample synth-sample ref-queries mark-reference-chunks
+.PHONY: up down init-db embed-only ingest extract extract-core extract-sample load-chunks load-graph load-graph-sample graph-wipe graph-reset graph-report dedup dedup-export dedup-offline dedup-filter dedup-apply test seed-demo s3-push s3-pull s3-push-embeddings s3-pull-embeddings s3-push-extracted s3-pull-extracted llm-up llm-smoke t2c-sample synth-sample ref-queries mark-reference-chunks
 
 DRY_RUN ?= 1
 INPUT ?= data/dedup_entities.json
 PLAN ?= data/dedup_plan.json
+FILTERED_PLAN ?= data/dedup_plan_filtered.json
 EMBED_DEVICE ?= cuda
 PYTHON ?= python3
 
@@ -77,6 +78,10 @@ dedup-offline:
 dedup:
 	@$(run_with_host_neo4j) \
 	DRY_RUN=$(DRY_RUN) PYTHONPATH=backend backend/.venv/bin/python -m app.graph.dedup --plan $(PLAN)
+
+dedup-filter:
+	@$(run_with_host_neo4j) \
+	PYTHONPATH=backend backend/.venv/bin/python backend/scripts/filter_dedup_plan.py --in $(PLAN) --out $(FILTERED_PLAN)
 
 dedup-apply:
 	@$(run_with_host_neo4j) \
