@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { forceCollide } from 'd3-force'
 import ForceGraph2D, { type ForceGraphMethods } from 'react-force-graph-2d'
+import { ExternalLink, Loader2 } from 'lucide-react'
 import type { EntityType, GraphEdge, GraphNode } from '../api/client'
 import { GRAPH_HIDDEN_ENTITY_TYPES } from '../api/client'
+import { useOpenDocument } from '../hooks/useOpenDocument'
 import { colors } from '../theme/tokens'
 
 interface GraphViewProps {
@@ -17,7 +20,6 @@ interface GraphViewProps {
 
 interface ForceNode {
   id: string
-  label: string
   name: string
   type: EntityType
   properties: Record<string, unknown>
@@ -31,6 +33,29 @@ interface ForceLink {
   target: string | ForceNode
   type: string
 }
+
+function PublicationDocumentButton({ docId }: { docId: string }) {
+  const { openDocument, loading, unavailable } = useOpenDocument()
+
+  return (
+    <button
+      type="button"
+      onClick={() => openDocument(docId)}
+      disabled={loading || unavailable}
+      title={unavailable ? 'Файл недоступен' : undefined}
+      className="mt-2 w-full flex items-center justify-center gap-1.5 text-[10px] py-1.5 rounded-control border border-surface-border hover:bg-neutral-50 disabled:opacity-50 disabled:cursor-not-allowed"
+    >
+      {loading ? (
+        <Loader2 className="w-3 h-3 animate-spin" />
+      ) : (
+        <ExternalLink className="w-3 h-3" />
+      )}
+      Открыть документ
+    </button>
+  )
+}
+
+const MAX_GRAPH_NODES = 45
 
 const ENTITY_TYPES: EntityType[] = [
   'Process',
@@ -70,9 +95,22 @@ const ENTITY_BG_CLASS: Record<EntityType, string> = {
   Chunk: 'bg-neutral-300',
 }
 
-function truncateLabel(label: string, max = 14): string {
+function nodeRadius(node: ForceNode): number {
+  return 4 + node.degree
+}
+
+function displayName(node: Pick<GraphNode, 'name' | 'label' | 'id'>): string {
+  return node.name || node.label || node.id
+}
+
+function truncateLabel(label: string, max = 16): string {
   if (label.length <= max) return label
   return `${label.slice(0, max - 1)}…`
+}
+
+function getConfidenceFromProps(properties: Record<string, unknown>): number | null {
+  const conf = properties.confidence
+  return typeof conf === 'number' ? conf : null
 }
 
 function getNodeColor(type: EntityType): string {
@@ -96,6 +134,8 @@ export default function GraphView({
   const [dimensions, setDimensions] = useState({ width: 360, height: 400 })
   const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null)
   const [popoverPos, setPopoverPos] = useState({ x: 0, y: 0 })
+  const [hoveredNode, setHoveredNode] = useState<ForceNode | null>(null)
+  const [pointerPos, setPointerPos] = useState({ x: 0, y: 0 })
 
   const citedSet = useMemo(() => new Set(citedNodeIds), [citedNodeIds])
   const hiddenTypes = useMemo(() => new Set(GRAPH_HIDDEN_ENTITY_TYPES), [])
@@ -105,7 +145,7 @@ export default function GraphView({
   )
   const nodeMap = useMemo(() => new Map(visibleNodes.map((n) => [n.id, n])), [visibleNodes])
 
-  const graphData = useMemo(() => {
+  const { graphData, totalNodeCount, displayedNodeCount } = useMemo(() => {
     const visibleIds = new Set(visibleNodes.map((n) => n.id))
     const degreeMap = new Map<string, number>()
     edges.forEach((e) => {
@@ -114,24 +154,41 @@ export default function GraphView({
       degreeMap.set(e.target, (degreeMap.get(e.target) ?? 0) + 1)
     })
 
-    const forceNodes: ForceNode[] = visibleNodes.map((n) => ({
+    const totalCount = visibleNodes.length
+    let selectedNodes = visibleNodes
+    if (visibleNodes.length > MAX_GRAPH_NODES) {
+      const scored = visibleNodes
+        .map((n) => ({
+          node: n,
+          score: (getConfidenceFromProps(n.properties) ?? 0) * (degreeMap.get(n.id) ?? 0),
+        }))
+        .sort((a, b) => b.score - a.score)
+      selectedNodes = scored.slice(0, MAX_GRAPH_NODES).map((s) => s.node)
+    }
+
+    const selectedIds = new Set(selectedNodes.map((n) => n.id))
+
+    const forceNodes: ForceNode[] = selectedNodes.map((n) => ({
       id: n.id,
-      label: n.label || n.name,
-      name: n.name,
+      name: displayName(n),
       type: n.type,
       properties: n.properties,
       degree: degreeMap.get(n.id) ?? 0,
     }))
 
     const forceLinks: ForceLink[] = edges
-      .filter((e) => visibleIds.has(e.source) && visibleIds.has(e.target))
+      .filter((e) => selectedIds.has(e.source) && selectedIds.has(e.target))
       .map((e) => ({
-      source: e.source,
-      target: e.target,
-      type: e.type,
-    }))
+        source: e.source,
+        target: e.target,
+        type: e.type,
+      }))
 
-    return { nodes: forceNodes, links: forceLinks }
+    return {
+      graphData: { nodes: forceNodes, links: forceLinks },
+      totalNodeCount: totalCount,
+      displayedNodeCount: forceNodes.length,
+    }
   }, [visibleNodes, edges])
 
   useEffect(() => {
@@ -155,15 +212,19 @@ export default function GraphView({
     fitPendingRef.current = true
   }, [graphData])
 
+  useEffect(() => {
+    const fg = fgRef.current
+    if (!fg) return
+
+    fg.d3Force('charge')?.strength(-120)
+    fg.d3Force('link')?.distance(60)
+    fg.d3Force('collide', forceCollide((node: ForceNode) => nodeRadius(node) + 4))
+    fg.d3ReheatSimulation()
+  }, [graphData])
+
   const fitGraphToView = useCallback(() => {
     if (!fgRef.current || graphData.nodes.length === 0) return
     fgRef.current.zoomToFit(400, 40)
-    requestAnimationFrame(() => {
-      const zoom = fgRef.current?.zoom()
-      if (zoom !== undefined && zoom < 0.55) {
-        fgRef.current?.zoom(0.55, 200)
-      }
-    })
   }, [graphData.nodes.length])
 
   const handleEngineStop = useCallback(() => {
@@ -191,7 +252,7 @@ export default function GraphView({
 
   const paintNode = useCallback(
     (node: ForceNode, ctx: CanvasRenderingContext2D, globalScale: number) => {
-      const radius = 4 + node.degree
+      const radius = nodeRadius(node)
       const isCited = citedSet.has(node.id)
       const isFlashing = flashNodeId === node.id
       const x = node.x ?? 0
@@ -209,23 +270,25 @@ export default function GraphView({
         ctx.stroke()
       }
 
-      const fontSize = 11 / globalScale
-      const label = truncateLabel(node.label)
-      ctx.font = `${fontSize}px sans-serif`
-      ctx.textAlign = 'center'
-      ctx.textBaseline = 'top'
-      const labelY = y + radius + 2 / globalScale
-      const textWidth = ctx.measureText(label).width
-      const pad = 2 / globalScale
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.9)'
-      ctx.fillRect(
-        x - textWidth / 2 - pad,
-        labelY - pad / 2,
-        textWidth + pad * 2,
-        fontSize + pad,
-      )
-      ctx.fillStyle = colors.graph.label
-      ctx.fillText(label, x, labelY)
+      if (globalScale > 0.8) {
+        const fontSize = 10 / globalScale
+        const label = truncateLabel(node.name)
+        ctx.font = `${fontSize}px sans-serif`
+        ctx.textAlign = 'center'
+        ctx.textBaseline = 'top'
+        const labelY = y + radius + 2 / globalScale
+        const textWidth = ctx.measureText(label).width
+        const pad = 2 / globalScale
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.9)'
+        ctx.fillRect(
+          x - textWidth / 2 - pad,
+          labelY - pad / 2,
+          textWidth + pad * 2,
+          fontSize + pad,
+        )
+        ctx.fillStyle = colors.graph.label
+        ctx.fillText(label, x, labelY)
+      }
     },
     [citedSet, flashNodeId],
   )
@@ -248,10 +311,15 @@ export default function GraphView({
     [nodeMap],
   )
 
-  const getConfidence = (node: GraphNode): number | null => {
-    const conf = node.properties.confidence
-    return typeof conf === 'number' ? conf : null
-  }
+  const handlePointerMove = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    const rect = containerRef.current?.getBoundingClientRect()
+    if (rect) {
+      setPointerPos({ x: e.clientX - rect.left, y: e.clientY - rect.top })
+    }
+  }, [])
+
+  const getConfidence = (node: GraphNode | ForceNode): number | null =>
+    getConfidenceFromProps(node.properties)
 
   const getSourceDoc = (node: GraphNode): string | null => {
     const doc = node.properties.source_doc
@@ -264,7 +332,11 @@ export default function GraphView({
         Граф связей · подсвечены цитируемые
       </p>
 
-      <div ref={containerRef} className="flex-1 relative min-h-0 mx-2 mb-2 rounded-control border border-surface-border bg-surface-card overflow-hidden">
+      <div
+        ref={containerRef}
+        className="flex-1 relative min-h-0 mx-2 mb-1 rounded-control border border-surface-border bg-surface-card overflow-hidden"
+        onMouseMove={handlePointerMove}
+      >
         {visibleNodes.length === 0 ? (
           <div className="absolute inset-0 flex items-center justify-center text-xs text-neutral-400">
             {loading
@@ -282,7 +354,7 @@ export default function GraphView({
             nodeCanvasObject={paintNode}
             nodePointerAreaPaint={(node, color, ctx) => {
               const n = node as ForceNode
-              const radius = 4 + n.degree
+              const radius = nodeRadius(n)
               ctx.beginPath()
               ctx.arc(n.x ?? 0, n.y ?? 0, radius + 4, 0, 2 * Math.PI)
               ctx.fillStyle = color
@@ -298,7 +370,11 @@ export default function GraphView({
             }
             linkWidth={1}
             onNodeClick={(node) => handleNodeClick(node as ForceNode)}
-            onBackgroundClick={() => setSelectedNode(null)}
+            onNodeHover={(node) => setHoveredNode((node as ForceNode | null) ?? null)}
+            onBackgroundClick={() => {
+              setSelectedNode(null)
+              setHoveredNode(null)
+            }}
             onEngineStop={handleEngineStop}
             backgroundColor={colors.surface.card}
             cooldownTicks={80}
@@ -308,6 +384,25 @@ export default function GraphView({
             enablePanInteraction
             enableZoomInteraction
           />
+        )}
+
+        {hoveredNode && !selectedNode && (
+          <div
+            className="absolute z-20 pointer-events-none max-w-[220px] rounded-card border border-surface-border bg-surface-card px-2.5 py-2 shadow-sm"
+            style={{
+              left: Math.min(dimensions.width - 228, Math.max(8, pointerPos.x + 12)),
+              top: Math.min(dimensions.height - 80, Math.max(8, pointerPos.y + 12)),
+            }}
+          >
+            <p className="text-xs font-medium text-neutral-900 leading-snug">{hoveredNode.name}</p>
+            <p className="text-[10px] text-neutral-500 mt-0.5">{ENTITY_LABELS[hoveredNode.type]}</p>
+            <p className="text-[10px] text-neutral-600 mt-0.5">
+              <span className="text-neutral-400">confidence: </span>
+              <span className="font-mono">
+                {getConfidence(hoveredNode)?.toFixed(2) ?? '—'}
+              </span>
+            </p>
+          </div>
         )}
 
         {selectedNode && (
@@ -344,6 +439,9 @@ export default function GraphView({
                 <span className="font-mono">{getSourceDoc(selectedNode)}</span>
               </p>
             )}
+            {selectedNode.type === 'Publication' && (
+              <PublicationDocumentButton key={selectedNode.id} docId={selectedNode.id} />
+            )}
             <button
               type="button"
               onClick={() => {
@@ -357,6 +455,12 @@ export default function GraphView({
           </div>
         )}
       </div>
+
+      {totalNodeCount > MAX_GRAPH_NODES && (
+        <p className="text-[10px] text-neutral-400 px-4 mb-1 shrink-0">
+          показано {displayedNodeCount} из {totalNodeCount}
+        </p>
+      )}
 
       <div className="px-4 pb-3 flex flex-wrap gap-x-3 gap-y-1 items-center shrink-0">
         {ENTITY_TYPES.map((type) => (
