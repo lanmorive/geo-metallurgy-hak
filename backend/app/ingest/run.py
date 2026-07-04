@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import logging
 import sys
 import tempfile
@@ -20,6 +21,7 @@ from app.ingest.chunker import blocks_to_chunks, write_jsonl, write_references
 from app.ingest.manifest import MANIFEST_NAME, load_manifest, save_manifest
 from app.ingest.parser import parse_file
 from app.ingest.pdf_parser import count_pdf_pages
+from app.ingest.source_meta import parse_source_key
 from app.schemas.ontology import ParsedDocumentMeta
 from app.storage import get_storage
 
@@ -71,6 +73,7 @@ def _manifest_entry_for_key(manifest: dict, source_key: str) -> dict | None:
     if entry.get("source_key") == source_key and entry.get("status") in (
       "ok",
       "skipped_too_large",
+      "scan_low_value",
     ):
       return entry
   return None
@@ -84,7 +87,7 @@ def _should_skip_by_key(manifest: dict, source_key: str, etag: str, *, force: bo
     return False
   if entry.get("etag") != etag:
     return False
-  return entry.get("status") in ("ok", "skipped_too_large")
+  return entry.get("status") in ("ok", "skipped_too_large", "scan_low_value")
 
 
 def _entry_to_output(entry: dict, source_key: str, file_name: str, etag: str) -> ProcessOutput:
@@ -186,6 +189,7 @@ def process_local_file(
 
   try:
     result, noise_dropped, reference_texts = parse_file(local_path)
+    source_meta = parse_source_key(source_key)
     author_hint = extract_author_hint(file_name)
     chunks = blocks_to_chunks(
       result.blocks,
@@ -193,12 +197,27 @@ def process_local_file(
       file_name=file_name,
       source_key=source_key,
       author_hint=author_hint,
+      venue=source_meta.venue,
+      year=source_meta.year,
+      doc_type=source_meta.doc_type,
+    )
+    chunk_ids = [c.chunk_id for c in chunks]
+    assert len(chunk_ids) == len(set(chunk_ids)), (
+      f"Duplicate chunk_id in {file_name}: "
+      f"{[cid for cid in chunk_ids if chunk_ids.count(cid) > 1]}"
     )
     tables = sum(1 for c in chunks if c.kind == "table")
     pages = result.doc_meta.pages
     text_chars = sum(len(c.text) for c in chunks)
+    text_chunks = [c for c in chunks if c.kind == "text"]
+    avg_chunk_chars = (
+      sum(len(c.text) for c in text_chunks) / len(text_chunks) if text_chunks else None
+    )
     text_chars_per_page = text_chars / pages if pages else None
     low_yield = text_chars_per_page is not None and text_chars_per_page < 150
+    status: str = "ok"
+    if result.doc_meta.scan_low_value:
+      status = "scan_low_value"
 
     jsonl_path = parsed_dir / f"{doc_id}.jsonl"
     refs_path = parsed_dir / f"{doc_id}.references.json"
@@ -219,12 +238,18 @@ def process_local_file(
       chunks=len(chunks),
       tables=tables,
       ocr_pages=result.doc_meta.ocr_pages,
+      ocr_skipped_pages=result.doc_meta.ocr_skipped_pages,
       ocr_low_yield_pages=result.doc_meta.ocr_low_yield_pages,
       noise_blocks_dropped=noise_dropped,
       text_chars=text_chars,
       text_chars_per_page=text_chars_per_page,
+      avg_chunk_chars=avg_chunk_chars,
       low_yield=low_yield,
-      status="ok",
+      category=source_meta.category,
+      venue=source_meta.venue,
+      year=source_meta.year,
+      doc_type=source_meta.doc_type,
+      status=status,
       processing_seconds=elapsed,
     )
     _write_meta(meta)
@@ -386,18 +411,21 @@ def _manifest_record(output: ProcessOutput) -> dict:
   }
 
 
-def _print_summary(outputs: list[ProcessOutput], total_seconds: float) -> None:
+def _print_summary(outputs: list[ProcessOutput], total_seconds: float, parsed_dir: Path) -> None:
   print("\n=== Ingest summary ===")
   print(
-    f"{'Document':<40} {'Chunks':>7} {'Tables':>7} {'OCR':>5} {'Noise':>7} {'Status':>10}"
+    f"{'Document':<36} {'Chunks':>7} {'AvgChr':>7} {'Tables':>7} "
+    f"{'OCR':>5} {'Noise':>7} {'Status':>14}"
   )
-  print("-" * 80)
+  print("-" * 90)
   low_yield_docs: list[str] = []
+  scan_low_value_docs: list[str] = []
   for out in outputs:
     m = out.meta
+    avg_chars = f"{m.avg_chunk_chars:.0f}" if m.avg_chunk_chars is not None else "-"
     print(
-      f"{out.file_name:<40} {m.chunks:>7} {m.tables:>7} {m.ocr_pages:>5} "
-      f"{m.noise_blocks_dropped:>7} {m.status:>10}"
+      f"{out.file_name:<36} {m.chunks:>7} {avg_chars:>7} {m.tables:>7} "
+      f"{m.ocr_pages:>5} {m.noise_blocks_dropped:>7} {m.status:>14}"
     )
     if m.status == "ok" and m.pages and m.pages > 0 and m.chunks / m.pages > 6:
       logger.warning(
@@ -406,11 +434,21 @@ def _print_summary(outputs: list[ProcessOutput], total_seconds: float) -> None:
         m.chunks,
         m.pages,
       )
+    if m.avg_chunk_chars is not None and (
+      m.avg_chunk_chars < 600 or m.avg_chunk_chars > 2500
+    ):
+      logger.warning(
+        "Unusual avg chunk size: %s (avg_chunk_chars=%.0f)",
+        out.file_name,
+        m.avg_chunk_chars,
+      )
     if m.low_yield:
       low_yield_docs.append(out.file_name)
+    if m.status == "scan_low_value":
+      scan_low_value_docs.append(out.file_name)
 
   ok_count = sum(1 for o in outputs if o.meta.status == "ok")
-  print("-" * 80)
+  print("-" * 90)
   print(f"Total files: {len(outputs)} (ok: {ok_count})")
   print(f"Total time: {total_seconds:.1f}s")
   if total_seconds > 0 and outputs:
@@ -421,11 +459,36 @@ def _print_summary(outputs: list[ProcessOutput], total_seconds: float) -> None:
     for name in low_yield_docs:
       print(f"  {name}")
 
+  if scan_low_value_docs:
+    print("\nScan low-value documents:")
+    for name in scan_low_value_docs:
+      print(f"  {name}")
+
   slowest = sorted(outputs, key=lambda o: o.processing_seconds, reverse=True)[:5]
   if slowest:
     print("\nTop 5 slowest:")
     for out in slowest:
       print(f"  {out.file_name}: {out.processing_seconds:.1f}s")
+
+  all_chunk_ids: list[str] = []
+  for out in outputs:
+    if out.meta.status not in ("ok", "scan_low_value"):
+      continue
+    jsonl_path = parsed_dir / f"{out.doc_id}.jsonl"
+    if not jsonl_path.exists():
+      continue
+    with jsonl_path.open(encoding="utf-8") as f:
+      for line in f:
+        if line.strip():
+          record = json.loads(line)
+          all_chunk_ids.append(record["chunk_id"])
+  duplicate_count = len(all_chunk_ids) - len(set(all_chunk_ids))
+  print(
+    f"\nUnique chunk_ids: {len(all_chunk_ids)} total, "
+    f"{duplicate_count} duplicates"
+  )
+  if duplicate_count:
+    raise AssertionError(f"Found {duplicate_count} duplicate chunk_ids across corpus")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -461,7 +524,7 @@ def main(argv: list[str] | None = None) -> int:
 
   if not jobs:
     logger.info("No new files to ingest (%d already done)", len(already_done))
-    _print_summary(all_outputs, time.perf_counter() - started)
+    _print_summary(all_outputs, time.perf_counter() - started, parsed_dir)
     return 0
 
   with ProcessPoolExecutor(max_workers=args.workers) as pool:
@@ -526,7 +589,7 @@ def main(argv: list[str] | None = None) -> int:
         all_outputs.append(output)
         manifest[output.file_hash] = _manifest_record(output)
 
-        if output.meta.status == "ok":
+        if output.meta.status in ("ok", "scan_low_value"):
           refs_path = parsed_dir / f"{output.doc_id}.references.json"
           _upload_outputs(storage, parsed_dir, output.doc_id, refs_path.exists())
 
@@ -541,7 +604,7 @@ def main(argv: list[str] | None = None) -> int:
     pbar.close()
 
   save_manifest(manifest_path, manifest)
-  _print_summary(all_outputs, time.perf_counter() - started)
+  _print_summary(all_outputs, time.perf_counter() - started, parsed_dir)
   return 0
 
 
