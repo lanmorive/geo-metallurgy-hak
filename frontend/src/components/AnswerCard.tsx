@@ -1,8 +1,10 @@
 import { useMemo, useState } from 'react'
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
 import type { Components } from 'react-markdown'
+import { Loader2 } from 'lucide-react'
 import type { Citation, Contradiction, QueryResponse } from '../api/client'
 import { DEMO_QUERIES } from '../constants/demoQueries'
+import { useOpenDocument } from '../hooks/useOpenDocument'
 
 interface AnswerCardProps {
   response: QueryResponse
@@ -39,6 +41,40 @@ function citationUrlTransform(url: string): string {
   return defaultUrlTransform(url)
 }
 
+function CitationBadge({
+  citation,
+  onCitationClick,
+}: {
+  citation: Citation
+  onCitationClick: (docId: string) => void
+}) {
+  const { openDocument, loading, unavailable } = useOpenDocument()
+
+  return (
+    <span className="inline-flex items-center align-middle mx-0.5 rounded-badge overflow-hidden bg-brand-badgeBg">
+      <button
+        type="button"
+        onClick={() => onCitationClick(citation.doc_id)}
+        className="inline-flex items-center px-1.5 py-0.5 text-brand-badgeText text-[10px] font-mono hover:opacity-80"
+      >
+        {shortDocName(citation)} · {citation.confidence.toFixed(2)}
+      </button>
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation()
+          void openDocument(citation.doc_id)
+        }}
+        disabled={loading || unavailable}
+        title={unavailable ? 'Файл недоступен' : 'Открыть документ'}
+        className="inline-flex items-center px-1 py-0.5 text-brand-badgeText text-[10px] hover:opacity-80 disabled:opacity-50 disabled:cursor-not-allowed border-l border-brand-badgeText/20"
+      >
+        {loading ? <Loader2 className="w-3 h-3 animate-spin" /> : '📄'}
+      </button>
+    </span>
+  )
+}
+
 export default function AnswerCard({
   response,
   onCitationClick,
@@ -64,13 +100,7 @@ export default function AnswerCard({
           const citation = citationMap.get(docId)
           if (!citation) return <span>{children}</span>
           return (
-            <button
-              type="button"
-              onClick={() => onCitationClick(docId)}
-              className="inline-flex items-center mx-0.5 px-1.5 py-0.5 rounded-badge bg-brand-badgeBg text-brand-badgeText text-[10px] font-mono hover:opacity-80 align-middle"
-            >
-              {shortDocName(citation)} · {citation.confidence.toFixed(2)}
-            </button>
+            <CitationBadge citation={citation} onCitationClick={onCitationClick} />
           )
         }
         return <a href={href}>{children}</a>

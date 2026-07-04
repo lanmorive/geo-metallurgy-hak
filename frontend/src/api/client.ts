@@ -145,6 +145,12 @@ export interface HealthResponse {
   neo4j: string
 }
 
+export interface DocumentLinkResponse {
+  url: string
+  title: string
+  file_name: string
+}
+
 const API_URL = import.meta.env.VITE_API_URL || ''
 const USE_MOCKS = import.meta.env.VITE_USE_MOCKS === '1'
 
@@ -234,4 +240,11 @@ export async function checkHealth(): Promise<HealthResponse> {
     return { status: 'ok', neo4j: 'unavailable' }
   }
   return fetchJson<HealthResponse>(`${API_URL}/api/health`)
+}
+
+export async function getDocumentLink(docId: string): Promise<DocumentLinkResponse> {
+  if (USE_MOCKS) {
+    throw new Error('Файл недоступен')
+  }
+  return fetchJson<DocumentLinkResponse>(`${API_URL}/api/documents/${docId}/link`)
 }
