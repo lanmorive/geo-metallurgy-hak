@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import uuid
 from enum import StrEnum
-from typing import Any, Self
+from typing import Any, Literal, Self
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -188,13 +188,34 @@ class ChunkMetadata(BaseModel):
 class ParsedChunk(BaseModel):
     """Контракт ingest → extraction: один чанк документа."""
 
-    chunk_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     doc_id: str
-    source_path: str
+    chunk_id: str
     text: str
+    kind: Literal["text", "table"]
+    section: str
     page: int | None = None
-    lang: Lang = Lang.RU
-    metadata: ChunkMetadata = Field(default_factory=ChunkMetadata)
+    lang: Literal["ru", "en"]
+    file_name: str
+    source_key: str
+
+
+class ParsedDocumentMeta(BaseModel):
+    """Sidecar-метаданные документа после ingest (не в JSONL)."""
+
+    doc_id: str
+    file_name: str
+    source_key: str
+    file_hash: str
+    author: str | None = None
+    created: str | None = None
+    pages: int | None = None
+    chunks: int
+    tables: int
+    ocr_pages: int
+    noise_blocks_dropped: int
+    status: Literal["ok", "error", "skipped_too_large"]
+    error: str | None = None
+    processing_seconds: float | None = None
 
 
 class ExtractionResult(BaseModel):

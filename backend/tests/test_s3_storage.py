@@ -91,7 +91,16 @@ def test_upload_jsonl_mocked(mock_boto_client: MagicMock) -> None:
 
     storage = S3Storage(_configured_s3_settings())
     records = [
-        ParsedChunk(doc_id="doc1", source_path="raw/doc1.pdf", text="hello"),
+        ParsedChunk(
+            doc_id="doc1",
+            chunk_id="doc1_00000",
+            text="hello",
+            kind="text",
+            section="frontmatter",
+            lang="ru",
+            file_name="doc1.pdf",
+            source_key="raw/doc1.pdf",
+        ),
     ]
     storage.upload_jsonl(records, "parsed/doc1.jsonl")
 
@@ -133,7 +142,14 @@ def test_iter_jsonl_mocked(mock_boto_client: MagicMock) -> None:
     mock_boto_client.return_value = client
 
     line = ParsedChunk(
-        doc_id="doc1", source_path="raw/doc1.pdf", text="chunk text"
+        doc_id="doc1",
+        chunk_id="doc1_00000",
+        text="chunk text",
+        kind="text",
+        section="frontmatter",
+        lang="ru",
+        file_name="doc1.pdf",
+        source_key="raw/doc1.pdf",
     ).model_dump_json()
     body = MagicMock()
     body.iter_lines.return_value = [line.encode("utf-8")]
